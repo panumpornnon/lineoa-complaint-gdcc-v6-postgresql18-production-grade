@@ -13,6 +13,7 @@
     "db:migrate": "node scripts/migrate.js",
     "admin:create": "node scripts/create-admin.js",
     "db:export-governance": "node scripts/export-governance-migration.js",
+    "db:check-governance": "node scripts/check-governance.js",
     "test": "node --test",
     "start:server": "node src/server.js"
   },
