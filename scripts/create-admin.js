@@ -32,21 +32,6 @@ try {
     throw new Error('ไม่สามารถเปลี่ยนบัญชี DEV เป็นสิทธิ์อื่นได้');
   }
 
-  if (parsed.data.role === 'dev') {
-    const existingDevResult = await pool.query(
-      `SELECT username
-         FROM staff_users
-        WHERE role = 'dev'
-        LIMIT 1`,
-    );
-    const existingDev = existingDevResult.rows[0];
-    if (existingDev && existingDev.username !== parsed.data.username) {
-      throw new Error(
-        `ระบบมีบัญชี DEV อยู่แล้ว (${existingDev.username}) และอนุญาตให้มีได้เพียง 1 บัญชี`,
-      );
-    }
-  }
-
   const passwordHash = await bcrypt.hash(parsed.data.password, 12);
 
   const result = await pool.query(

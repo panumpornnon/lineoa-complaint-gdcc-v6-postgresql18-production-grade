@@ -1786,7 +1786,7 @@ router.post('/governance/users', requireRoles('admin', 'dev'), async (req, res) 
   if (parsed.data.role === 'dev') {
     throw new ApiError(
       403,
-      'ไม่สามารถเพิ่มบัญชี DEV จากหน้าจัดการผู้ใช้งานได้ ระบบอนุญาตให้มี DEV เพียง 1 บัญชี',
+      'ไม่สามารถเพิ่มบัญชี DEV จากหน้าจัดการผู้ใช้งานได้ ต้องสร้างผ่านคำสั่ง admin:create บนเครื่องเซิร์ฟเวอร์เท่านั้น',
     );
   }
 
