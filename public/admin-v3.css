@@ -2544,3 +2544,136 @@ a.map-link-button:visited{
   background:#ffe1e1;
   color:#a52b2b;
 }
+
+/* ===== แผงนำเข้า / ส่งออกข้อมูล (20260914-data-transfer-1) ===== */
+.transfer-body {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 4px 2px 2px;
+}
+.transfer-dataset {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 340px;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+.transfer-dataset select {
+  padding: 10px 12px;
+  border: 1px solid #d8d3e6;
+  border-radius: 12px;
+  background: #fff;
+  font: inherit;
+  font-weight: 500;
+}
+.transfer-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+}
+.transfer-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 18px;
+  border: 1px solid #e7e2f2;
+  border-radius: 16px;
+  background: #faf8ff;
+}
+.transfer-card h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+.transfer-card p {
+  margin: 0;
+  color: #6b6480;
+  font-size: 0.86rem;
+  line-height: 1.55;
+}
+.transfer-file {
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px dashed #c9c0de;
+  border-radius: 12px;
+  background: #fff;
+  font-size: 0.85rem;
+}
+.transfer-note {
+  margin: 0;
+  color: #6b6480;
+  font-size: 0.82rem;
+  line-height: 1.6;
+}
+.transfer-preview-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  align-items: center;
+  justify-content: space-between;
+  margin: 18px 0 10px;
+}
+.transfer-preview-head h3 {
+  margin: 0;
+  font-size: 0.98rem;
+}
+.transfer-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.transfer-chip {
+  display: inline-block;
+  padding: 3px 11px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.transfer-chip.insert {
+  background: #e4f6ea;
+  color: #1d6b3a;
+}
+.transfer-chip.update {
+  background: #eae4fb;
+  color: #5b3fa8;
+}
+.transfer-chip.error {
+  background: #fbe3e3;
+  color: #a42c2c;
+}
+.transfer-row-error td {
+  background: #fff6f6;
+}
+.transfer-blocked {
+  margin: 0 0 12px;
+  padding: 11px 14px;
+  border-radius: 12px;
+  background: #fbe3e3;
+  color: #8f2626;
+  font-size: 0.86rem;
+  font-weight: 600;
+}
+.transfer-confirm-bar {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+.transfer-confirm-bar .v3-primary[disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+@media (max-width: 640px) {
+  .transfer-dataset {
+    max-width: none;
+  }
+  .transfer-confirm-bar {
+    justify-content: stretch;
+  }
+  .transfer-confirm-bar button {
+    flex: 1;
+  }
+}

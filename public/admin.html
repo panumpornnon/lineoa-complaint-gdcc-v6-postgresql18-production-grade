@@ -9,7 +9,7 @@
     <meta name="theme-color" content="#083f3a" />
     <title>Smart City Complaint Command Center</title>
     <link rel="stylesheet" href="/styles.css?v=20260727-image-viewer-1" />
-    <link rel="stylesheet" href="/admin-v3.css?v=20260821-sla-badge-2" />
+    <link rel="stylesheet" href="/admin-v3.css?v=20260914-data-transfer-1" />
     <link
       rel="stylesheet"
       href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
@@ -19,7 +19,7 @@
       src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
       crossorigin="anonymous"
     ></script>
-    <script type="module" src="/admin.js?v=20260821-sla-badge-2"></script>
+    <script type="module" src="/admin.js?v=20260914-data-transfer-1"></script>
   </head>
   <body class="admin-v3-body">
     <section id="loginPanel" class="v3-login">
@@ -433,6 +433,9 @@
             <button class="governance-tab" data-governance="audit">
               Audit Log
             </button>
+            <button class="governance-tab hidden" data-governance="dataTransfer" data-admin-only>
+              นำเข้า / ส่งออก
+            </button>
           </div>
           <section id="governanceCategories" class="governance-panel v3-card">
             <div class="v3-card-head">
@@ -515,6 +518,61 @@
               </button>
             </div>
             <div id="auditGovernanceTable"></div>
+          </section>
+          <section id="governanceDataTransfer" class="governance-panel v3-card hidden">
+            <div class="v3-card-head">
+              <div>
+                <p class="overline">DATA TRANSFER</p>
+                <h2>นำเข้า / ส่งออกข้อมูล</h2>
+              </div>
+            </div>
+            <div class="transfer-body">
+              <label class="transfer-dataset">
+                <span>เลือกชุดข้อมูลที่ต้องการ</span>
+                <select id="transferDataset">
+                  <option value="departments">หน่วยงาน</option>
+                  <option value="categories">หมวดหมู่และ SLA</option>
+                  <option value="staffProfiles">ข้อมูลเจ้าหน้าที่</option>
+                </select>
+              </label>
+
+              <div class="transfer-grid">
+                <div class="transfer-card">
+                  <h3>ส่งออกเป็นไฟล์ CSV</h3>
+                  <p>
+                    ดาวน์โหลดข้อมูลชุดที่เลือกทั้งหมด เปิดแก้ไขใน Excel ได้
+                    แล้วนำกลับเข้ามาผ่านช่องนำเข้าด้านขวา
+                  </p>
+                  <button id="transferExportButton" class="v3-primary" type="button">
+                    ดาวน์โหลด CSV
+                  </button>
+                </div>
+                <div class="transfer-card">
+                  <h3>นำเข้าจากไฟล์ CSV</h3>
+                  <p>
+                    ระบบจะแสดงตัวอย่างให้ตรวจก่อนเสมอ
+                    ยังไม่บันทึกลงฐานข้อมูลจนกว่าจะกดยืนยัน
+                  </p>
+                  <input
+                    type="file"
+                    id="transferFile"
+                    accept=".csv,text/csv"
+                    class="transfer-file"
+                  />
+                  <button id="transferPreviewButton" class="v3-primary" type="button">
+                    ตรวจสอบไฟล์
+                  </button>
+                </div>
+              </div>
+
+              <p class="transfer-note">
+                หมายเหตุ: การนำเข้าจะเพิ่มและปรับปรุงข้อมูลเท่านั้น ไม่ลบรายการที่ไม่มีในไฟล์
+                และไม่รองรับบัญชีผู้ใช้งานเพราะมีรหัสผ่านที่ต้องไม่ออกจากฐานข้อมูล
+              </p>
+
+              <div id="transferAlert" class="alert hidden"></div>
+              <div id="transferPreview"></div>
+            </div>
           </section>
         </section>
       </main>

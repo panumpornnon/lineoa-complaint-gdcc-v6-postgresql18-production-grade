@@ -19,7 +19,7 @@ import {
   sendStoredImage,
   uploadStaffWorkImages,
 } from '../services/uploads.js';
-import { escapeCsvField, toExcelText } from '../utils/csv.js';
+import { escapeCsvField, toExcelText, parseCsv, unwrapExcelText } from '../utils/csv.js';
 
 const router = Router();
 
@@ -2168,5 +2168,417 @@ router.get('/reports/export.csv', requireRoles('admin', 'dev', 'supervisor', 'ex
   await writeAudit(req,'report.export.csv','report',null,{rows:result.rowCount});
   res.setHeader('content-type','text/csv; charset=utf-8'); res.setHeader('content-disposition','attachment; filename="complaints-report.csv"'); res.send(csv);
 });
+
+// ===========================================================================
+// นำเข้า / ส่งออกข้อมูลหลังบ้านเป็นไฟล์ CSV
+//
+// ครอบคลุม 3 ชุดข้อมูล: หน่วยงาน, หมวดหมู่และ SLA, ข้อมูลเจ้าหน้าที่
+// ไม่ครอบบัญชีผู้ใช้งาน (staff_users) เพราะมีรหัสผ่านที่ต้องไม่หลุดออกจากฐานข้อมูล
+//
+// การนำเข้าแบ่งเป็นสองขั้น: ตรวจสอบไฟล์ (preview) แล้วจึงยืนยัน (commit)
+// ทั้งสองขั้นใช้ตรรกะวิเคราะห์ชุดเดียวกัน และไม่เก็บสถานะไว้ที่เซิร์ฟเวอร์ระหว่างขั้น
+// หน้าเว็บจึงส่งเนื้อไฟล์มาทั้งสองรอบ ทำให้ไม่มีปัญหาไฟล์ค้างหรือเซสชันหมดอายุ
+// ===========================================================================
+
+const TRANSFER_DATASETS = {
+  departments: {
+    label: 'หน่วยงาน',
+    headers: ['code', 'name_th', 'is_active'],
+    // คอลัมน์ที่ห่อด้วย ="..." ตอนส่งออก เพื่อกัน Excel ตัดเลขศูนย์นำหน้า
+    excelTextColumns: [],
+    selectSql: `SELECT code, name_th, is_active FROM departments ORDER BY code`,
+  },
+  categories: {
+    label: 'หมวดหมู่และ SLA',
+    headers: ['code', 'name_th', 'department_code', 'sla_hours', 'is_active', 'sort_order'],
+    excelTextColumns: [],
+    selectSql: `SELECT c.code,
+                       c.name_th,
+                       d.code AS department_code,
+                       c.sla_hours,
+                       c.is_active,
+                       c.sort_order
+                  FROM complaint_categories c
+                  LEFT JOIN departments d ON d.id = c.department_id
+                 ORDER BY c.sort_order, c.code`,
+  },
+  staffProfiles: {
+    label: 'ข้อมูลเจ้าหน้าที่',
+    headers: ['full_name', 'position_title', 'department_code', 'line_id', 'phone'],
+    excelTextColumns: ['line_id', 'phone'],
+    selectSql: `SELECT sp.full_name,
+                       sp.position_title,
+                       d.code AS department_code,
+                       sp.line_id,
+                       sp.phone
+                  FROM staff_profiles sp
+                  LEFT JOIN departments d ON d.id = sp.department_id
+                 ORDER BY d.code NULLS LAST, sp.full_name`,
+  },
+};
+
+function getDataset(name) {
+  const dataset = TRANSFER_DATASETS[name];
+  if (!dataset) {
+    throw new ApiError(400, 'ไม่รู้จักชุดข้อมูลที่ระบุ');
+  }
+  return dataset;
+}
+
+function normalizeText(value) {
+  const text = unwrapExcelText(value);
+  return text === '' ? null : text;
+}
+
+// รับได้ทั้ง true/false, 1/0, ใช่/ไม่, เปิด/ปิด เพราะไฟล์อาจถูกแก้ใน Excel
+function parseBoolean(value, fallback = true) {
+  const text = String(unwrapExcelText(value)).trim().toLowerCase();
+  if (text === '') return fallback;
+  if (['true', '1', 'yes', 'y', 'ใช่', 'เปิด', 'เปิดใช้งาน'].includes(text)) return true;
+  if (['false', '0', 'no', 'n', 'ไม่', 'ไม่ใช่', 'ปิด', 'ปิดใช้งาน'].includes(text)) return false;
+  return null;
+}
+
+function parseInteger(value, fallback) {
+  const text = String(unwrapExcelText(value)).trim();
+  if (text === '') return fallback;
+  if (!/^-?\d+$/.test(text)) return null;
+  return Number.parseInt(text, 10);
+}
+
+// ---------------------------------------------------------------------------
+// วิเคราะห์ไฟล์ที่อัปโหลด เทียบกับข้อมูลที่มีอยู่ แล้วบอกว่าแต่ละแถวจะเกิดอะไรขึ้น
+// ไม่แตะฐานข้อมูล ใช้ได้ทั้งตอนดูตัวอย่างและตอนยืนยัน
+// ---------------------------------------------------------------------------
+async function analyzeImport(datasetName, csvText) {
+  const dataset = getDataset(datasetName);
+  const table = parseCsv(csvText);
+
+  if (!table.length) {
+    throw new ApiError(400, 'ไฟล์ว่างเปล่า ไม่พบข้อมูลที่จะนำเข้า');
+  }
+
+  const headerRow = table[0].map((cell) => unwrapExcelText(cell).trim().toLowerCase());
+  const missingHeaders = dataset.headers.filter(
+    (name) => !['is_active', 'sort_order', 'sla_hours', 'department_code', 'line_id', 'phone'].includes(name)
+      && !headerRow.includes(name),
+  );
+  if (missingHeaders.length) {
+    throw new ApiError(
+      400,
+      `หัวตารางไม่ครบ ขาดคอลัมน์: ${missingHeaders.join(', ')} — แนะนำให้กดส่งออกไฟล์ตัวอย่างก่อน แล้วแก้ในไฟล์นั้น`,
+    );
+  }
+
+  const columnIndex = Object.fromEntries(
+    dataset.headers.map((name) => [name, headerRow.indexOf(name)]),
+  );
+  const cell = (row, name) => {
+    const index = columnIndex[name];
+    return index >= 0 ? row[index] : '';
+  };
+
+  // ข้อมูลปัจจุบันในฐานข้อมูล ใช้ตัดสินว่าแถวนี้จะเพิ่มใหม่หรืออัปเดต
+  const departmentRows = await pool.query(`SELECT id, code FROM departments`);
+  const departmentIdByCode = new Map(departmentRows.rows.map((r) => [r.code, r.id]));
+
+  const plan = [];
+  let inserts = 0;
+  let updates = 0;
+  let errors = 0;
+
+  const seenKeys = new Set();
+
+  let existingByKey = new Map();
+  let lineIdOwner = new Map();
+
+  if (datasetName === 'departments') {
+    const rows = await pool.query(`SELECT code FROM departments`);
+    existingByKey = new Map(rows.rows.map((r) => [r.code, r]));
+  } else if (datasetName === 'categories') {
+    const rows = await pool.query(`SELECT code FROM complaint_categories`);
+    existingByKey = new Map(rows.rows.map((r) => [r.code, r]));
+  } else {
+    const rows = await pool.query(
+      `SELECT sp.full_name, sp.line_id, d.code AS department_code
+         FROM staff_profiles sp
+         LEFT JOIN departments d ON d.id = sp.department_id`,
+    );
+    for (const r of rows.rows) {
+      const key = `${r.department_code ?? ''}|${String(r.full_name).trim()}`;
+      existingByKey.set(key, r);
+      if (r.line_id) lineIdOwner.set(String(r.line_id).toLowerCase(), key);
+    }
+  }
+
+  for (let index = 1; index < table.length; index += 1) {
+    const row = table[index];
+    const lineNumber = index + 1;
+    const problems = [];
+    let key = null;
+    let values = {};
+
+    if (datasetName === 'departments') {
+      const code = normalizeText(cell(row, 'code'));
+      const nameTh = normalizeText(cell(row, 'name_th'));
+      const isActive = parseBoolean(cell(row, 'is_active'));
+
+      if (!code) problems.push('ไม่ได้ระบุรหัสหน่วยงาน (code)');
+      if (!nameTh) problems.push('ไม่ได้ระบุชื่อหน่วยงาน (name_th)');
+      if (isActive === null) problems.push('ค่าสถานะ (is_active) ไม่ถูกต้อง ใช้ได้เฉพาะ true หรือ false');
+
+      key = code;
+      values = { code, name_th: nameTh, is_active: isActive };
+    } else if (datasetName === 'categories') {
+      const code = normalizeText(cell(row, 'code'));
+      const nameTh = normalizeText(cell(row, 'name_th'));
+      const departmentCode = normalizeText(cell(row, 'department_code'));
+      const slaHours = parseInteger(cell(row, 'sla_hours'), 72);
+      const isActive = parseBoolean(cell(row, 'is_active'));
+      const sortOrder = parseInteger(cell(row, 'sort_order'), 100);
+
+      if (!code) problems.push('ไม่ได้ระบุรหัสหมวดหมู่ (code)');
+      if (!nameTh) problems.push('ไม่ได้ระบุชื่อหมวดหมู่ (name_th)');
+      if (slaHours === null || slaHours <= 0) problems.push('ค่า SLA (sla_hours) ต้องเป็นจำนวนเต็มบวก');
+      if (sortOrder === null) problems.push('ค่าลำดับ (sort_order) ต้องเป็นจำนวนเต็ม');
+      if (isActive === null) problems.push('ค่าสถานะ (is_active) ไม่ถูกต้อง ใช้ได้เฉพาะ true หรือ false');
+      if (departmentCode && !departmentIdByCode.has(departmentCode)) {
+        problems.push(`ไม่พบหน่วยงานรหัส ${departmentCode} ในระบบ`);
+      }
+
+      key = code;
+      values = {
+        code,
+        name_th: nameTh,
+        department_code: departmentCode,
+        sla_hours: slaHours,
+        is_active: isActive,
+        sort_order: sortOrder,
+      };
+    } else {
+      const fullName = normalizeText(cell(row, 'full_name'));
+      const positionTitle = normalizeText(cell(row, 'position_title'));
+      const departmentCode = normalizeText(cell(row, 'department_code'));
+      const lineId = normalizeText(cell(row, 'line_id'));
+      const phone = normalizeText(cell(row, 'phone'));
+
+      if (!fullName) problems.push('ไม่ได้ระบุชื่อ-สกุล (full_name)');
+      if (!positionTitle) problems.push('ไม่ได้ระบุตำแหน่ง (position_title)');
+      if (departmentCode && !departmentIdByCode.has(departmentCode)) {
+        problems.push(`ไม่พบหน่วยงานรหัส ${departmentCode} ในระบบ`);
+      }
+
+      key = fullName ? `${departmentCode ?? ''}|${fullName}` : null;
+
+      // ไฟล์ 022 มี unique index บน LOWER(line_id) ทั้งตาราง
+      // ถ้าไอดีไลน์นี้เป็นของคนอื่นอยู่แล้ว การนำเข้าจะล้มด้วยรหัส 23505
+      // จับตั้งแต่ตอนตรวจไฟล์จะอธิบายให้ผู้ใช้เข้าใจได้ดีกว่าปล่อยให้ฐานข้อมูลปฏิเสธ
+      if (lineId) {
+        const owner = lineIdOwner.get(lineId.toLowerCase());
+        if (owner && owner !== key) {
+          problems.push(`ไอดีไลน์ ${lineId} ถูกใช้โดยเจ้าหน้าที่คนอื่นอยู่แล้ว`);
+        }
+      }
+
+      values = {
+        full_name: fullName,
+        position_title: positionTitle,
+        department_code: departmentCode,
+        line_id: lineId,
+        phone,
+      };
+    }
+
+    if (key && seenKeys.has(key)) {
+      problems.push('รายการนี้ซ้ำกับแถวก่อนหน้าในไฟล์เดียวกัน');
+    }
+    if (key) seenKeys.add(key);
+
+    let action;
+    if (problems.length) {
+      action = 'error';
+      errors += 1;
+    } else if (existingByKey.has(key)) {
+      action = 'update';
+      updates += 1;
+    } else {
+      action = 'insert';
+      inserts += 1;
+    }
+
+    plan.push({ line: lineNumber, action, values, problems });
+  }
+
+  return {
+    dataset: datasetName,
+    label: dataset.label,
+    total: plan.length,
+    summary: { insert: inserts, update: updates, error: errors },
+    rows: plan,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// ส่งออกเป็นไฟล์ CSV
+// ---------------------------------------------------------------------------
+router.get('/governance/export.csv', requireRoles('admin', 'dev'), async (req, res) => {
+  const datasetName = String(req.query.dataset ?? '');
+  const dataset = getDataset(datasetName);
+
+  const result = await pool.query(dataset.selectSql);
+  const body = result.rows.map((row) =>
+    dataset.headers
+      .map((name) =>
+        dataset.excelTextColumns.includes(name)
+          ? escapeCsvField(toExcelText(row[name]))
+          : escapeCsvField(row[name]),
+      )
+      .join(','),
+  );
+  // BOM ข้างหน้าเพื่อให้ Excel อ่านภาษาไทยได้ถูกต้อง
+  const csv = '﻿' + [dataset.headers.join(','), ...body].join('\n');
+
+  await writeAudit(req, 'governance.export.csv', 'governance', null, {
+    dataset: datasetName,
+    rows: result.rowCount,
+  });
+
+  res.setHeader('content-type', 'text/csv; charset=utf-8');
+  res.setHeader('content-disposition', `attachment; filename="${datasetName}.csv"`);
+  res.send(csv);
+});
+
+// ---------------------------------------------------------------------------
+// ขั้นที่ 1 ตรวจไฟล์แล้วบอกว่าจะเกิดอะไรขึ้น ยังไม่แตะฐานข้อมูล
+// ---------------------------------------------------------------------------
+router.post('/governance/import/preview', requireRoles('admin', 'dev'), async (req, res) => {
+  const parsed = z
+    .object({ dataset: z.string(), csv: z.string().min(1).max(400_000) })
+    .safeParse(req.body);
+  if (!parsed.success) {
+    throw new ApiError(400, 'ข้อมูลที่ส่งมาไม่ถูกต้อง', parsed.error.flatten());
+  }
+
+  const plan = await analyzeImport(parsed.data.dataset, parsed.data.csv);
+  res.json({ data: plan });
+});
+
+// ---------------------------------------------------------------------------
+// ขั้นที่ 2 ยืนยันแล้วเขียนลงฐานข้อมูลจริง
+// วิเคราะห์ไฟล์ใหม่อีกรอบ ไม่เชื่อผลที่หน้าเว็บส่งมา เผื่อข้อมูลเปลี่ยนระหว่างสองขั้น
+// ---------------------------------------------------------------------------
+router.post('/governance/import/commit', requireRoles('admin', 'dev'), async (req, res) => {
+  const parsed = z
+    .object({ dataset: z.string(), csv: z.string().min(1).max(400_000) })
+    .safeParse(req.body);
+  if (!parsed.success) {
+    throw new ApiError(400, 'ข้อมูลที่ส่งมาไม่ถูกต้อง', parsed.error.flatten());
+  }
+
+  const datasetName = parsed.data.dataset;
+  const plan = await analyzeImport(datasetName, parsed.data.csv);
+
+  // ถ้ามีแถวผิดพลาดจะไม่นำเข้าเลยแม้แต่แถวเดียว
+  // เพื่อไม่ให้ได้ข้อมูลเข้าไปครึ่งๆ กลางๆ แล้วตามแก้ยาก
+  if (plan.summary.error > 0) {
+    throw new ApiError(
+      400,
+      `ไฟล์มีข้อผิดพลาด ${plan.summary.error} แถว จึงยังไม่นำเข้าข้อมูลใดเลย กรุณาแก้ไฟล์แล้วลองใหม่`,
+    );
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    for (const row of plan.rows) {
+      const v = row.values;
+
+      if (datasetName === 'departments') {
+        await client.query(
+          `INSERT INTO departments (code, name_th, is_active)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (code) DO UPDATE SET
+             name_th = EXCLUDED.name_th,
+             is_active = EXCLUDED.is_active,
+             updated_at = current_timestamp`,
+          [v.code, v.name_th, v.is_active],
+        );
+      } else if (datasetName === 'categories') {
+        await client.query(
+          `INSERT INTO complaint_categories (code, name_th, sla_hours, is_active, sort_order, department_id)
+           SELECT $1, $2, $3, $4, $5, d.id
+             FROM (SELECT 1) AS anchor
+             LEFT JOIN departments d ON d.code = $6
+           ON CONFLICT (code) DO UPDATE SET
+             name_th = EXCLUDED.name_th,
+             sla_hours = EXCLUDED.sla_hours,
+             is_active = EXCLUDED.is_active,
+             sort_order = EXCLUDED.sort_order,
+             department_id = EXCLUDED.department_id,
+             updated_at = current_timestamp`,
+          [v.code, v.name_th, v.sla_hours, v.is_active, v.sort_order, v.department_code],
+        );
+      } else {
+        // ตัวระบุตัวตนคือ ชื่อ-สกุล + หน่วยงาน เพราะตารางนี้ไม่มีรหัสประจำตัว
+        const updated = await client.query(
+          `UPDATE staff_profiles AS sp
+              SET position_title = $2,
+                  line_id        = $3,
+                  phone          = $4
+             FROM (SELECT d.id AS department_id FROM (SELECT 1) AS anchor
+                    LEFT JOIN departments d ON d.code = $5) AS target
+            WHERE sp.department_id IS NOT DISTINCT FROM target.department_id
+              AND BTRIM(sp.full_name) = BTRIM($1)
+          RETURNING sp.id`,
+          [v.full_name, v.position_title, v.line_id, v.phone, v.department_code],
+        );
+
+        if (!updated.rowCount) {
+          await client.query(
+            `INSERT INTO staff_profiles (full_name, position_title, line_id, phone, department_id)
+             SELECT $1, $2, $3, $4, d.id
+               FROM (SELECT 1) AS anchor
+               LEFT JOIN departments d ON d.code = $5`,
+            [v.full_name, v.position_title, v.line_id, v.phone, v.department_code],
+          );
+        }
+      }
+    }
+
+    await writeAudit(
+      req,
+      'governance.import.csv',
+      'governance',
+      null,
+      {
+        dataset: datasetName,
+        inserted: plan.summary.insert,
+        updated: plan.summary.update,
+      },
+      client,
+    );
+
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    if (error?.code === '23505') {
+      throw new ApiError(409, 'ข้อมูลซ้ำกับที่มีอยู่ในระบบ จึงยกเลิกการนำเข้าทั้งหมด');
+    }
+    throw error;
+  } finally {
+    client.release();
+  }
+
+  res.json({
+    data: {
+      dataset: datasetName,
+      label: plan.label,
+      inserted: plan.summary.insert,
+      updated: plan.summary.update,
+    },
+  });
+});
+
 
 export default router;
