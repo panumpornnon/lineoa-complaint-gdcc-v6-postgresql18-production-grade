@@ -1523,6 +1523,10 @@ async function loadGovernance(mode = "categories") {
         ),
       );
     }
+    if (mode === "dataTransfer") {
+      // แผงนี้ไม่ต้องโหลดข้อมูลล่วงหน้า แค่ล้างผลลัพธ์ของรอบก่อนทิ้ง
+      resetTransferPanel();
+    }
   } catch (e) {
     show("#pageAlert", e.message);
   }
@@ -2136,3 +2140,186 @@ $("#exportCsvButton").onclick = async () => {
   }
 };
 loadMe();
+
+// ===========================================================================
+// แผงนำเข้า / ส่งออกข้อมูลหลังบ้านเป็นไฟล์ CSV
+//
+// การนำเข้าแบ่งเป็นสองขั้นเสมอ: ตรวจไฟล์ก่อน แล้วจึงกดยืนยัน
+// หน้าเว็บเก็บเนื้อไฟล์ไว้ในตัวแปรระหว่างสองขั้น แล้วส่งไปใหม่ตอนยืนยัน
+// เซิร์ฟเวอร์จะวิเคราะห์ซ้ำอีกรอบ ไม่เชื่อผลที่หน้าเว็บส่งมา
+// ===========================================================================
+const transferDatasetLabels = {
+  departments: "หน่วยงาน",
+  categories: "หมวดหมู่และ SLA",
+  staffProfiles: "ข้อมูลเจ้าหน้าที่",
+};
+const transferActionLabels = {
+  insert: "เพิ่มใหม่",
+  update: "อัปเดต",
+  error: "ผิดพลาด",
+};
+let transferPendingCsv = null;
+let transferPendingDataset = null;
+
+function resetTransferPanel() {
+  transferPendingCsv = null;
+  transferPendingDataset = null;
+  const preview = $("#transferPreview");
+  if (preview) preview.innerHTML = "";
+  const file = $("#transferFile");
+  if (file) file.value = "";
+  clear("#transferAlert");
+}
+
+function transferSelectedDataset() {
+  return $("#transferDataset")?.value || "departments";
+}
+
+async function exportGovernanceCsv() {
+  const dataset = transferSelectedDataset();
+  clear("#transferAlert");
+  try {
+    const r = await fetch(
+      `/api/admin/governance/export.csv?dataset=${encodeURIComponent(dataset)}`,
+      { headers: { authorization: `Bearer ${token}` } },
+    );
+    if (!r.ok) throw new Error("ไม่สามารถส่งออกข้อมูลได้");
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${dataset}-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    show(
+      "#transferAlert",
+      `ดาวน์โหลดไฟล์ ${transferDatasetLabels[dataset]} เรียบร้อยแล้ว`,
+      "success",
+    );
+  } catch (e) {
+    show("#transferAlert", e.message);
+  }
+}
+
+function transferPreviewHtml(plan) {
+  const { summary } = plan;
+  const chips = [
+    `<span class="transfer-chip insert">เพิ่มใหม่ ${summary.insert}</span>`,
+    `<span class="transfer-chip update">อัปเดต ${summary.update}</span>`,
+    summary.error
+      ? `<span class="transfer-chip error">ผิดพลาด ${summary.error}</span>`
+      : "",
+  ].join("");
+
+  const columns = Object.keys(plan.rows[0]?.values ?? {});
+  const rows = plan.rows.map((row) => {
+    const cells = columns
+      .map((name) => `<td>${escapeHtml(row.values[name] ?? "-")}</td>`)
+      .join("");
+    const note = row.problems.length
+      ? escapeHtml(row.problems.join(" / "))
+      : "-";
+    return `<tr class="transfer-row-${row.action}"><td>${row.line}</td><td><span class="transfer-chip ${row.action}">${transferActionLabels[row.action]}</span></td>${cells}<td>${note}</td></tr>`;
+  });
+
+  const headers = ["บรรทัด", "การกระทำ", ...columns, "หมายเหตุ"];
+  const confirmDisabled = summary.error > 0;
+
+  return `
+    <div class="transfer-preview-head">
+      <h3>ตัวอย่างการนำเข้า ${escapeHtml(plan.label)} ทั้งหมด ${plan.total} แถว</h3>
+      <div class="transfer-chips">${chips}</div>
+    </div>
+    ${
+      confirmDisabled
+        ? '<p class="transfer-blocked">มีแถวที่ผิดพลาด ระบบจะไม่นำเข้าข้อมูลใดเลยจนกว่าจะแก้ไฟล์ให้ถูกต้องทั้งหมด</p>'
+        : ""
+    }
+    ${governanceTable(headers, rows)}
+    <div class="transfer-confirm-bar">
+      <button id="transferCancelButton" class="v3-text-btn" type="button">ยกเลิก</button>
+      <button id="transferConfirmButton" class="v3-primary" type="button" ${confirmDisabled ? "disabled" : ""}>
+        ยืนยันนำเข้า
+      </button>
+    </div>
+  `;
+}
+
+async function previewGovernanceImport() {
+  const dataset = transferSelectedDataset();
+  const input = $("#transferFile");
+  const file = input?.files?.[0];
+  clear("#transferAlert");
+  $("#transferPreview").innerHTML = "";
+
+  if (!file) {
+    show("#transferAlert", "กรุณาเลือกไฟล์ CSV ก่อน");
+    return;
+  }
+  // เซิร์ฟเวอร์รับเนื้อคำขอได้ 1 MB และภาษาไทยหนึ่งตัวอักษรใช้ 3 ไบต์
+  // จึงกันไว้ที่ 700 KB เพื่อให้ข้อความแจ้งเตือนชัดกว่าปล่อยให้คำขอถูกปฏิเสธ
+  if (file.size > 700 * 1024) {
+    show(
+      "#transferAlert",
+      "ไฟล์ใหญ่เกินไป รองรับไม่เกิน 700 KB ต่อครั้ง กรุณาแบ่งไฟล์แล้วนำเข้าทีละส่วน",
+    );
+    return;
+  }
+
+  try {
+    const csv = await file.text();
+    const r = await api("/api/admin/governance/import/preview", {
+      method: "POST",
+      body: JSON.stringify({ dataset, csv }),
+    });
+    transferPendingCsv = csv;
+    transferPendingDataset = dataset;
+    $("#transferPreview").innerHTML = transferPreviewHtml(r.data);
+    $("#transferConfirmButton").onclick = () => confirmGovernanceImport();
+    $("#transferCancelButton").onclick = () => resetTransferPanel();
+  } catch (e) {
+    transferPendingCsv = null;
+    transferPendingDataset = null;
+    show("#transferAlert", e.message);
+  }
+}
+
+async function confirmGovernanceImport() {
+  if (!transferPendingCsv || !transferPendingDataset) {
+    show("#transferAlert", "ไม่พบไฟล์ที่ตรวจไว้ กรุณาเลือกไฟล์แล้วตรวจสอบใหม่");
+    return;
+  }
+  const button = $("#transferConfirmButton");
+  if (button) button.disabled = true;
+  clear("#transferAlert");
+
+  try {
+    const r = await api("/api/admin/governance/import/commit", {
+      method: "POST",
+      body: JSON.stringify({
+        dataset: transferPendingDataset,
+        csv: transferPendingCsv,
+      }),
+    });
+    resetTransferPanel();
+    show(
+      "#transferAlert",
+      `นำเข้า ${r.data.label} สำเร็จ เพิ่มใหม่ ${r.data.inserted} รายการ อัปเดต ${r.data.updated} รายการ`,
+      "success",
+    );
+    // โหลดรายการหน่วยงานใหม่ เพราะดรอปดาวน์ในหน้าจออื่นอ้างอิงค่าชุดนี้
+    try {
+      const dep = await api("/api/admin/departments");
+      departments = dep.data;
+    } catch {
+      // ถ้าโหลดไม่สำเร็จไม่ถือว่าการนำเข้าล้มเหลว ผู้ใช้รีเฟรชหน้าเองได้
+    }
+  } catch (e) {
+    if (button) button.disabled = false;
+    show("#transferAlert", e.message);
+  }
+}
+
+$("#transferExportButton").onclick = () => exportGovernanceCsv();
+$("#transferPreviewButton").onclick = () => previewGovernanceImport();
+$("#transferDataset").onchange = () => resetTransferPanel();
