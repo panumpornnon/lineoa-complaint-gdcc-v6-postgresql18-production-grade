@@ -1,0 +1,40 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: lineoa-complaint-api:${APP_VERSION:-5.0.0}
+    restart: unless-stopped
+    env_file: [.env.production]
+    ports: ["127.0.0.1:3000:3000"]
+    volumes:
+      #- complaint_uploads:/app/uploads
+      - /mnt/c/Project/lineoa-complaint-gdcc-v6:/app/uploads
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/health/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+        reservations:
+          cpus: "0.5"
+          memory: 512M
+    networks: [app_internal]
+
+volumes:
+  complaint_uploads:
+
+networks:
+  app_internal:
+    driver: bridge

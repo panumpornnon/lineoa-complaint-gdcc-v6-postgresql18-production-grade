@@ -1,0 +1,7 @@
+.env*
+!.env.example
+!.env.production.example
+backup_*.sql
+backup_*.dump
+*.bak
+migration-error.txt

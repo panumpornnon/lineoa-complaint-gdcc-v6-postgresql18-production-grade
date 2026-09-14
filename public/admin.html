@@ -1,0 +1,736 @@
+<!doctype html>
+<html lang="th">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width,initial-scale=1,viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#083f3a" />
+    <title>Smart City Complaint Command Center</title>
+    <link rel="stylesheet" href="/styles.css?v=20260727-image-viewer-1" />
+    <link rel="stylesheet" href="/admin-v3.css?v=20260821-sla-badge-2" />
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      crossorigin="anonymous"
+    />
+    <script
+      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+      crossorigin="anonymous"
+    ></script>
+    <script type="module" src="/admin.js?v=20260821-sla-badge-2"></script>
+  </head>
+  <body class="admin-v3-body">
+    <section id="loginPanel" class="v3-login">
+      <div class="login-visual">
+        <div class="city-orbit orbit-one"></div>
+        <div class="city-orbit orbit-two"></div>
+        <div class="login-brand">
+          <img
+            class="citizen-logo"
+            src="./assets/suratcity-logo-bigsize-w5983xh5983-trans.png"
+            alt="เทศบาลนครสุราษฎร์ธานี"/>
+          <div>
+            <strong>SMART CITY</strong
+            ><small>Complaint Management Platform</small>
+          </div>
+        </div>
+        <div class="login-copy">
+          <p class="overline">CONNECTED • RESPONSIVE • TRANSPARENT</p>
+          <h1>ศูนย์บัญชาการ<br />รับเรื่องร้องเรียนเมืองอัจฉริยะ</h1>
+          <p>
+            บริหารเรื่องร้องเรียนแบบครบวงจร ตั้งแต่ LINE OA, ภาพถ่าย, พิกัด,
+            การมอบหมายงาน ไปจนถึง Dashboard ผู้บริหาร
+          </p>
+        </div>
+        <div class="login-feature-grid">
+          <div><b>24/7</b><span>รับเรื่องออนไลน์</span></div>
+          <div><b>Real-time</b><span>ติดตามสถานะ</span></div>
+          <div><b>Smart Map</b><span>วิเคราะห์พื้นที่</span></div>
+        </div>
+      </div>
+      <div class="login-form-side">
+        <div class="login-card">
+          <span class="login-badge">STAFF ACCESS</span>
+          <h2>เข้าสู่ระบบเจ้าหน้าที่</h2>
+          <p>กรุณาใช้บัญชีที่ได้รับอนุญาตจากผู้ดูแลระบบ</p>
+          <div id="adminAlert" class="alert hidden"></div>
+          <form id="loginForm">
+            <label
+              >ชื่อผู้ใช้<input
+                id="username"
+                autocomplete="username"
+                required
+                placeholder="ชื่อผู้ใช้" /></label
+            ><label
+              >รหัสผ่าน<input
+                id="password"
+                type="password"
+                autocomplete="current-password"
+                required
+                placeholder="••••••••••••" /></label
+            ><button class="v3-primary full" type="submit">
+              เข้าสู่ระบบอย่างปลอดภัย
+            </button>
+          </form>
+          <small class="security-note"
+            >🔒 ระบบใช้ JWT, HTTPS และบันทึกประวัติการใช้งาน</small
+          >
+        </div>
+      </div>
+    </section>
+
+    <div id="appShell" class="v3-shell hidden">
+      <aside class="v3-sidebar">
+        <div class="v3-brand">
+          <img
+            class="citizen-logo"
+            src="./assets/suratcity-logo-bigsize-w5983xh5983-trans.png"
+            alt="เทศบาลนครสุราษฎร์ธานี"
+          />
+          <div><strong>เทศบาลนครสุราษฎร์ธานี</strong></div>
+        </div>
+        <nav class="v3-nav">
+          <button class="v3-nav-item active" data-view="dashboard">
+            <span>▦</span><b>Command Center</b>
+          </button>
+          <button class="v3-nav-item" data-view="complaints">
+            <span>▤</span><b>เรื่องร้องเรียน</b>
+          </button>
+          <button class="v3-nav-item" data-view="map">
+            <span>⌖</span><b>Smart Map</b>
+          </button>
+          <button class="v3-nav-item" data-view="reports">
+            <span>◒</span><b>Analytics</b>
+          </button>
+          <button class="v3-nav-item" data-view="settings">
+            <span>⚙</span><b>ตั้งค่าระบบ</b>
+          </button>
+        </nav>
+        <div class="system-health">
+          <span class="pulse-dot"></span>
+          <div><b>ระบบออนไลน์</b><small>API & Database ปกติ</small></div>
+        </div>
+        <div class="v3-user">
+          <div class="v3-avatar"><img
+            class="human-logo"
+            src="./assets/user-tranparent.png"
+            alt="เจ้าหน้าที่"
+          /></div>
+          <div>
+            <b id="staffName">เจ้าหน้าที่</b><small id="staffRole">staff</small>
+          </div>
+        </div>
+        <button id="logoutButton" class="v3-logout" type="button">
+          ออกจากระบบ
+        </button>
+      </aside>
+
+      <main class="v3-main">
+        <header class="v3-header">
+          <div>
+            <p class="overline">SMART CITY OPERATIONS</p>
+            <h1 id="pageTitle">Command Center</h1>
+            <p id="pageSubtitle">
+              ภาพรวมสถานการณ์และประสิทธิภาพการให้บริการประชาชน
+            </p>
+          </div>
+          <div class="v3-header-actions">
+            <label id="executiveDepartmentScope" class="executive-department-scope hidden">
+              <span>ดูข้อมูลงานของกอง</span>
+              <select id="executiveDepartmentFilter" aria-label="เลือกกองที่ต้องการดู">
+                <option value="">ทุกกอง</option>
+              </select>
+            </label>
+            <div class="date-pill"><span>◷</span><b id="todayLabel"></b></div>
+            <button
+              id="refreshAll"
+              class="v3-icon-button"
+              title="รีเฟรช"
+              aria-label="รีเฟรช"
+            >
+              ↻</button
+            ><button
+              id="mobileLogoutButton"
+              class="v3-mobile-logout"
+              type="button"
+              aria-label="ออกจากระบบ"
+            >
+              ออกจากระบบ
+            </button>
+          </div>
+        </header>
+        <div id="pageAlert" class="alert hidden"></div>
+
+        <section id="dashboardView" class="admin-view">
+          <div id="kpiGrid" class="v3-kpi-grid"></div>
+          <div id="dashboardGrid" class="v3-dashboard-grid">
+            <article class="v3-card trend-card">
+              <div class="v3-card-head">
+                <div>
+                  <p class="overline">PERFORMANCE TREND</p>
+                  <h2>แนวโน้มเรื่องร้องเรียน 6 เดือน</h2>
+                </div>
+                <span class="chart-legend"
+                  ><i class="received-dot"></i>รับเรื่อง
+                  <i class="done-dot"></i>เสร็จสิ้น</span
+                >
+              </div>
+              <div id="trendChart" class="svg-chart"></div>
+            </article>
+            <article class="v3-card status-card">
+              <div class="v3-card-head">
+                <div>
+                  <p class="overline">CASE STATUS</p>
+                  <h2>สัดส่วนสถานะงาน</h2>
+                </div>
+              </div>
+              <div class="donut-layout">
+                <div id="statusDonut" class="donut-chart"></div>
+                <div id="statusLegend" class="donut-legend"></div>
+              </div>
+            </article>
+            <article id="userStatusCard" class="v3-card status-card hidden">
+              <div class="v3-card-head">
+                <div>
+                  <p class="overline">USER STATUS</p>
+                  <h2>สถานะการเข้าใช้งาน Backend</h2>
+                </div>
+              </div>
+              <div class="donut-layout">
+                <div id="userStatusDonut" class="donut-chart"></div>
+                <div id="userStatusLegend" class="donut-legend"></div>
+              </div>
+            </article>
+            <article class="v3-card urgent-card">
+              <div class="v3-card-head">
+                <div>
+                  <p class="overline danger-text">ACTION REQUIRED</p>
+                  <h2>เรื่องเร่งด่วนและใกล้ครบกำหนด</h2>
+                </div>
+                <button class="v3-text-btn" data-go="complaints">
+                  ดูทั้งหมด →
+                </button>
+              </div>
+              <div id="urgentCases" class="urgent-list"></div>
+            </article>
+            <article id="topCategoriesCard" class="v3-card category-card">
+              <div class="v3-card-head">
+                <div>
+                  <p class="overline">TOP CATEGORIES</p>
+                  <h2>ประเภทเรื่องที่พบมาก</h2>
+                </div>
+              </div>
+              <div id="categoryBars" class="metric-bars"></div>
+              <div id="topCategoryPagination" class="insight-pagination" aria-label="หน้าประเภทเรื่องที่พบมาก"></div>
+            </article>
+            <article id="topUserDepartmentsCard" class="v3-card category-card hidden">
+              <div class="v3-card-head">
+                <div>
+                  <p class="overline">TOP USER DEPARTMENTS</p>
+                  <h2>จำนวนผู้เข้าใช้งานตามหน่วยงาน (30 วัน)</h2>
+                </div>
+              </div>
+              <div id="userDepartmentBars" class="metric-bars"></div>
+            </article>
+            <article class="v3-card recent-card span-2">
+              <div class="v3-card-head">
+                <div>
+                  <p class="overline">LIVE OPERATIONS</p>
+                  <h2>รายการร้องเรียนล่าสุด</h2>
+                </div>
+                <button class="v3-text-btn" data-go="complaints">
+                  เปิดศูนย์จัดการ →
+                </button>
+              </div>
+              <div id="recentTable"></div>
+            </article>
+            <article id="departmentWorkloadCard" class="v3-card department-card">
+              <div class="v3-card-head">
+                <div>
+                  <p class="overline">WORKLOAD</p>
+                  <h2>ภาระงานตามหน่วยงาน</h2>
+                </div>
+              </div>
+              <div id="departmentBars" class="metric-bars"></div>
+            </article>
+          </div>
+        </section>
+
+        <section id="complaintsView" class="admin-view hidden">
+          <header class="complaint-print-header" aria-hidden="true">
+            <h1>รายการเรื่องร้องเรียน</h1>
+            <p id="complaintPrintMeta"></p>
+          </header>
+          <article class="v3-card complaint-center-card">
+            <div class="complaint-toolbar">
+              <div class="search-box">
+                <span>⌕</span
+                ><input
+                  id="searchInput"
+                  placeholder="ค้นหาเลขรับเรื่อง ชื่อเรื่อง ชื่อผู้ร้อง หรือเบอร์โทร"
+                />
+              </div>
+              <select id="statusFilter">
+                <option value="">ทุกสถานะ</option>
+                <option value="new">รับเรื่องใหม่</option>
+                <option value="received">รับเรื่องแล้ว</option>
+                <option value="assigned">มอบหมายแล้ว</option>
+                <option value="in_progress">กำลังดำเนินการ</option>
+                <option value="completed">เสร็จสิ้น</option>
+              </select>
+              <select id="complaintMonthFilter" aria-label="เลือกเดือนของเรื่องร้องเรียน">
+                <option value="">ทุกเดือน</option>
+              </select>
+              <select id="complaintCategoryFilter" aria-label="เลือกหมวดหมู่ของเรื่องร้องเรียน">
+                <option value="">ทุกหมวดหมู่</option>
+              </select>
+              <select id="complaintPageSize" aria-label="เลือกจำนวนรายการที่แสดงต่อหน้า">
+                <option value="10">แสดง 10 รายการ</option>
+                <option value="20" selected>แสดง 20 รายการ</option>
+                <option value="50">แสดง 50 รายการ</option>
+                <option value="100">แสดง 100 รายการ</option>
+              </select>
+              <button id="searchButton" class="v3-primary" type="button">
+                ค้นหา
+              </button>
+              <button id="printComplaintListButton" class="complaint-print-button" type="button">
+                <span aria-hidden="true">⎙</span> พิมพ์รายการ
+              </button>
+            </div>
+            <div id="complaintTable"></div>
+            <div id="pagination" class="v3-pagination"></div>
+          </article>
+        </section>
+
+        <section id="mapView" class="admin-view hidden">
+          <div class="map-command-grid">
+            <div class="v3-card map-panel-card">
+              <div class="v3-card-head">
+                <div>
+                  <p class="overline">SMART GEO MAP</p>
+                  <h2>แผนที่รวมจุดร้องเรียน</h2>
+                  <p>เลือกหมุดเพื่อตรวจสอบเรื่องร้องเรียนบน OpenStreetMap</p>
+                </div>
+                <div class="map-status-legend" aria-label="คำอธิบายสีของหมุดสถานะ">
+                  <span><i class="map-legend-new"></i>รับเรื่องใหม่</span>
+                  <span><i class="map-legend-received"></i>รับเรื่องแล้ว</span>
+                  <span><i class="map-legend-assigned"></i>มอบหมายแล้ว</span>
+                  <span><i class="map-legend-progress"></i>กำลังดำเนินการ</span>
+                  <span><i class="map-legend-completed"></i>เสร็จสิ้น</span>
+                </div>
+              </div>
+              <div
+                id="adminComplaintMap"
+                class="smart-map-stage"
+                role="region"
+                aria-label="แผนที่ OpenStreetMap แสดงจุดร้องเรียน"
+              ></div>
+            </div>
+            <div class="v3-card map-list-card">
+              <div class="v3-card-head">
+                <div>
+                  <p class="overline">LOCATIONS</p>
+                  <h2>รายการที่มีพิกัด</h2>
+                </div>
+                <label class="map-month-filter">
+                  <span>เลือกเดือน</span>
+                  <select id="mapMonthFilter" aria-label="เลือกเดือนของเรื่องร้องเรียน"></select>
+                </label>
+              </div>
+              <div id="mapComplaintList" class="location-list"></div>
+            </div>
+          </div>
+          <section
+            id="mobileMapLocations"
+            class="mobile-map-locations"
+            aria-labelledby="mobileMapLocationsTitle"
+            aria-live="polite"
+          >
+            <p class="overline">LOCATIONS</p>
+            <h2 id="mobileMapLocationsTitle">
+              รายการที่มีพิกัด
+              <span id="mobileMapComplaintCount" class="mobile-location-count"></span>
+            </h2>
+            <label class="map-month-filter mobile-map-month-filter">
+              <span>เลือกเดือน</span>
+              <select id="mobileMapMonthFilter" aria-label="เลือกเดือนของเรื่องร้องเรียนบนมือถือ"></select>
+            </label>
+            <div
+              id="mobileMapCaseList"
+              class="mobile-map-case-list"
+              aria-label="รายการร้องเรียนที่มีพิกัด"
+            >
+              <p class="muted">กำลังโหลดรายการ…</p>
+            </div>
+            <div
+              id="mobileMapPagination"
+              class="mobile-map-pagination"
+              aria-label="เปลี่ยนหน้ารายการที่มีพิกัด"
+            ></div>
+          </section>
+        </section>
+
+        <section id="reportsView" class="admin-view hidden">
+          <div id="reportSummary" class="report-kpi-grid"></div>
+          <div class="analytics-grid">
+            <article class="v3-card">
+              <p class="overline">CATEGORY INSIGHT</p>
+              <h2>สัดส่วนตามหมวดหมู่</h2>
+              <div
+                id="reportCategory"
+                class="metric-bars"
+              ></div>
+              <div id="reportCategoryPagination" class="insight-pagination" aria-label="หน้ารายการหมวดหมู่"></div>
+            </article>
+            <article class="v3-card">
+              <p class="overline">DEPARTMENT INSIGHT</p>
+              <h2>ภาระงานหน่วยงาน</h2>
+              <div
+                id="reportDepartment"
+                class="metric-bars"
+              ></div>
+              <div id="reportDepartmentPagination" class="insight-pagination" aria-label="หน้ารายการหน่วยงาน"></div>
+            </article>
+            <article class="v3-card span-2">
+              <div class="v3-card-head">
+                <div>
+                  <p class="overline">MONTHLY PERFORMANCE</p>
+                  <h2>ประสิทธิภาพรายเดือน</h2>
+                </div>
+                <button id="exportCsvButton" class="v3-primary" type="button">
+                  Export CSV
+                </button>
+              </div>
+              <div id="reportTrend" class="svg-chart tall"></div>
+            </article>
+          </div>
+        </section>
+
+        <section id="settingsView" class="admin-view hidden">
+          <div class="settings-hero">
+            <p class="overline">SYSTEM GOVERNANCE</p>
+            <h2>ศูนย์ควบคุมระบบ</h2>
+            <p>
+              บริหารผู้ใช้งาน หน่วยงาน หมวดหมู่ SLA และตรวจสอบ Audit Log
+              จากระบบจริง
+            </p>
+          </div>
+          <div class="governance-tabs">
+            <button class="governance-tab active" data-governance="categories">
+              หมวดหมู่และ SLA
+            </button>
+            <button class="governance-tab" data-governance="departments">
+              หน่วยงาน
+            </button>
+            <button class="governance-tab" data-governance="users">
+              ผู้ใช้งาน
+            </button>
+            <button class="governance-tab" data-governance="staffProfiles">
+              ข้อมูลเจ้าหน้าที่
+            </button>
+            <button class="governance-tab" data-governance="audit">
+              Audit Log
+            </button>
+          </div>
+          <section id="governanceCategories" class="governance-panel v3-card">
+            <div class="v3-card-head">
+              <div>
+                <p class="overline">SERVICE CATALOG</p>
+                <h2>หมวดหมู่และ SLA</h2>
+              </div>
+              <button id="addCategoryButton" class="v3-primary">
+                เพิ่มหมวดหมู่
+              </button>
+            </div>
+            <div id="categoryGovernanceTable"></div>
+          </section>
+          <section
+            id="governanceDepartments"
+            class="governance-panel v3-card hidden"
+          >
+            <div class="v3-card-head">
+              <div>
+                <p class="overline">ORGANIZATION</p>
+                <h2>หน่วยงานรับผิดชอบ</h2>
+              </div>
+              <button
+                id="addDepartmentButton"
+                class="v3-primary hidden"
+                data-admin-only
+              >
+                เพิ่มหน่วยงาน
+              </button>
+            </div>
+            <div id="departmentGovernanceTable"></div>
+          </section>
+          <section id="governanceUsers" class="governance-panel v3-card hidden">
+            <div class="v3-card-head">
+              <div>
+                <p class="overline">ACCESS CONTROL</p>
+                <h2>ผู้ใช้งานและสิทธิ์</h2>
+              </div>
+              <button
+                id="addUserButton"
+                class="v3-primary hidden"
+                data-admin-only
+              >
+                เพิ่มผู้ใช้งาน
+              </button>
+            </div>
+            <div id="userGovernanceTable"></div>
+          </section>
+          <section id="governanceStaffProfiles" class="governance-panel v3-card hidden">
+            <div class="v3-card-head">
+              <div>
+                <p class="overline">STAFF DIRECTORY</p>
+                <h2>ข้อมูลเจ้าหน้าที่</h2>
+              </div>
+              <div class="staff-profile-head-actions">
+                <label class="staff-profile-department-filter">
+                  <span>ดูเจ้าหน้าที่ของหน่วยงาน</span>
+                  <select id="staffProfileDepartmentFilter">
+                    <option value="">ทุกหน่วยงาน</option>
+                  </select>
+                </label>
+                <button
+                  id="addStaffProfileButton"
+                  class="v3-primary hidden"
+                >
+                  เพิ่มข้อมูลเจ้าหน้าที่
+                </button>
+              </div>
+            </div>
+            <div id="staffProfileGovernanceTable"></div>
+          </section>
+          <section id="governanceAudit" class="governance-panel v3-card hidden">
+            <div class="v3-card-head">
+              <div>
+                <p class="overline">TRACEABILITY</p>
+                <h2>Audit Log</h2>
+              </div>
+              <button id="refreshAuditButton" class="v3-text-btn">
+                รีเฟรช
+              </button>
+            </div>
+            <div id="auditGovernanceTable"></div>
+          </section>
+        </section>
+      </main>
+
+      <div id="detailDrawerBackdrop" class="v3-drawer-backdrop hidden" aria-hidden="true"></div>
+      <aside id="detailDrawer" class="v3-drawer hidden">
+        <div class="drawer-top">
+          <div>
+            <p class="overline">CASE INTELLIGENCE</p>
+            <h2 id="drawerReference">-</h2>
+          </div>
+          <div class="drawer-top-actions">
+            <button id="printComplaintDetailButton" class="complaint-print-button" type="button">
+              <span aria-hidden="true">⎙</span> พิมพ์
+            </button>
+            <button id="closeDrawer" class="v3-close" type="button">×</button>
+          </div>
+        </div>
+        <div id="drawerContent" class="drawer-content"></div>
+      </aside>
+    </div>
+    <dialog id="governanceDialog" class="governance-dialog">
+      <form id="governanceForm">
+        <div class="dialog-head">
+          <div>
+            <p class="overline">SYSTEM GOVERNANCE</p>
+            <h2 id="governanceDialogTitle">จัดการข้อมูล</h2>
+          </div>
+          <button
+            id="governanceCloseButton"
+            type="button"
+            class="v3-close"
+            aria-label="ปิด"
+          >
+            ×
+          </button>
+        </div>
+        <div id="governanceDialogFields" class="dialog-fields"></div>
+        <div class="dialog-actions">
+          <button id="governanceCancelButton" type="button" class="v3-text-btn">
+            ยกเลิก</button
+          ><button id="governanceSaveButton" type="submit" class="v3-primary">
+            บันทึก
+          </button>
+        </div>
+      </form>
+    </dialog>
+    <dialog
+      id="deleteCategoryDialog"
+      class="logout-confirm-dialog"
+      aria-labelledby="deleteCategoryTitle"
+      aria-describedby="deleteCategoryDescription"
+    >
+      <div class="logout-confirm-panel">
+        <div class="logout-confirm-icon delete-confirm-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none">
+            <path d="M4 7h16"></path>
+            <path d="M9 7V4h6v3"></path>
+            <path d="M7 7l1 13h8l1-13"></path>
+            <path d="M10 11v5M14 11v5"></path>
+          </svg>
+        </div>
+        <h2 id="deleteCategoryTitle">ยืนยันการลบหมวดหมู่</h2>
+        <p id="deleteCategoryDescription">
+          ต้องการลบหมวดหมู่ <strong id="deleteCategoryName">-</strong> ใช่หรือไม่?
+        </p>
+        <p id="deleteCategoryUsageWarning"></p>
+        <div id="deleteCategoryAlert" class="alert hidden"></div>
+        <div class="logout-confirm-actions">
+          <button id="deleteCategoryCancelButton" type="button" class="logout-cancel-button">
+            ยกเลิก
+          </button>
+          <button id="deleteCategoryConfirmButton" type="button" class="logout-confirm-button">
+            ลบหมวดหมู่
+          </button>
+        </div>
+      </div>
+    </dialog>
+    <dialog
+      id="deleteUserDialog"
+      class="logout-confirm-dialog"
+      aria-labelledby="deleteUserTitle"
+      aria-describedby="deleteUserDescription"
+    >
+      <div class="logout-confirm-panel">
+        <div class="logout-confirm-icon delete-confirm-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none">
+            <circle cx="9" cy="8" r="3.5"></circle>
+            <path d="M3.5 19c.6-3.6 2.4-5.5 5.5-5.5 1.2 0 2.2.3 3.1.9"></path>
+            <path d="M15 15l5 5M20 15l-5 5"></path>
+          </svg>
+        </div>
+        <h2 id="deleteUserTitle">ยืนยันการลบผู้ใช้งาน</h2>
+        <p id="deleteUserDescription">
+          ต้องการลบ <strong id="deleteUserName">-</strong>
+          (<span id="deleteUserUsername">-</span>) ใช่หรือไม่?
+        </p>
+        <p>บัญชีที่มีประวัติการดำเนินงานจะไม่สามารถลบได้ กรุณาระงับบัญชีแทน</p>
+        <div id="deleteUserAlert" class="alert hidden"></div>
+        <div class="logout-confirm-actions">
+          <button id="deleteUserCancelButton" type="button" class="logout-cancel-button">
+            ยกเลิก
+          </button>
+          <button id="deleteUserConfirmButton" type="button" class="logout-confirm-button">
+            ลบผู้ใช้งาน
+          </button>
+        </div>
+      </div>
+    </dialog>
+    <dialog
+      id="deleteStaffProfileDialog"
+      class="logout-confirm-dialog"
+      aria-labelledby="deleteStaffProfileTitle"
+      aria-describedby="deleteStaffProfileDescription"
+    >
+      <div class="logout-confirm-panel">
+        <div class="logout-confirm-icon delete-confirm-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none">
+            <circle cx="9" cy="8" r="3.5"></circle>
+            <path d="M3.5 19c.6-3.6 2.4-5.5 5.5-5.5 1.2 0 2.2.3 3.1.9"></path>
+            <path d="M15 15l5 5M20 15l-5 5"></path>
+          </svg>
+        </div>
+        <h2 id="deleteStaffProfileTitle">ยืนยันการลบข้อมูลเจ้าหน้าที่</h2>
+        <p id="deleteStaffProfileDescription">
+          ต้องการลบข้อมูลของ <strong id="deleteStaffProfileName">-</strong> ใช่หรือไม่?
+        </p>
+        <p>การลบรายการนี้ไม่สามารถย้อนกลับได้</p>
+        <div id="deleteStaffProfileAlert" class="alert hidden"></div>
+        <div class="logout-confirm-actions">
+          <button id="deleteStaffProfileCancelButton" type="button" class="logout-cancel-button">
+            ยกเลิก
+          </button>
+          <button id="deleteStaffProfileConfirmButton" type="button" class="logout-confirm-button">
+            ลบข้อมูลเจ้าหน้าที่
+          </button>
+        </div>
+      </div>
+    </dialog>
+    <dialog
+      id="logoutConfirmDialog"
+      class="logout-confirm-dialog"
+      aria-labelledby="logoutConfirmTitle"
+      aria-describedby="logoutConfirmDescription"
+    >
+      <div class="logout-confirm-panel">
+        <div class="logout-confirm-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none">
+            <circle cx="12" cy="8" r="3.5"></circle>
+            <path d="M5.5 20c.7-4 3-6 6.5-6s5.8 2 6.5 6"></path>
+          </svg>
+        </div>
+        <h2 id="logoutConfirmTitle">ยืนยันการออกจากระบบ</h2>
+        <p id="logoutConfirmDescription">
+          คุณต้องการออกจากระบบใช่หรือไม่?
+        </p>
+        <div class="logout-confirm-actions">
+          <button id="logoutCancelButton" type="button" class="logout-cancel-button">
+            ยกเลิก
+          </button>
+          <button id="logoutConfirmButton" type="button" class="logout-confirm-button">
+            ออกจากระบบ
+          </button>
+        </div>
+      </div>
+    </dialog>
+    <dialog
+      id="deleteComplaintDialog"
+      class="logout-confirm-dialog"
+      aria-labelledby="deleteComplaintTitle"
+      aria-describedby="deleteComplaintDescription"
+    >
+      <div class="logout-confirm-panel">
+        <div class="logout-confirm-icon delete-confirm-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none">
+            <path d="M4 7h16"></path>
+            <path d="M9 7V4h6v3"></path>
+            <path d="M7 7l1 13h8l1-13"></path>
+            <path d="M10 11v5M14 11v5"></path>
+          </svg>
+        </div>
+        <h2 id="deleteComplaintTitle">ยืนยันการลบเรื่องร้องเรียน</h2>
+        <p id="deleteComplaintDescription">
+          เรื่อง <strong id="deleteComplaintReference">-</strong> จะถูกลบถาวร
+          รวมถึงประวัติและรูปภาพทั้งหมด
+        </p>
+        <label class="delete-complaint-reason">
+          <span>หมายเหตุการลบ <b aria-hidden="true">*</b></span>
+          <textarea
+            id="deleteComplaintReason"
+            minlength="4"
+            maxlength="100"
+            required
+            placeholder="ระบุเหตุผลที่ต้องลบ 4–100 ตัวอักษร"
+          ></textarea>
+        </label>
+        <div id="deleteComplaintAlert" class="alert hidden"></div>
+        <div class="logout-confirm-actions">
+          <button id="deleteComplaintCancelButton" type="button" class="logout-cancel-button">
+            ยกเลิก
+          </button>
+          <button id="deleteComplaintConfirmButton" type="button" class="logout-confirm-button">
+            ลบเรื่องถาวร
+          </button>
+        </div>
+      </div>
+    </dialog>
+    <dialog id="adminImageViewer" class="image-viewer" aria-labelledby="adminImageViewerTitle">
+      <div class="image-viewer-panel">
+        <header>
+          <h2 id="adminImageViewerTitle">ดูรูปภาพ</h2>
+          <button id="adminImageViewerClose" class="image-viewer-close" type="button" aria-label="ปิดรูปภาพ">×</button>
+        </header>
+        <img id="adminImageViewerImage" alt="" />
+        <p id="adminImageViewerCaption"></p>
+      </div>
+    </dialog>
+  </body>
+</html>

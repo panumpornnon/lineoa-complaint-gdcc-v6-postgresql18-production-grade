@@ -1,0 +1,41 @@
+services:
+  - type: web
+    name: lineoa-complaint-gdcc-v6
+    runtime: node
+    plan: free
+    branch: develop
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /health/live
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: 22
+      # Neon: ตั้งค่าจริงใน Render Dashboard > Environment (ห้าม commit ลง git)
+      - key: DATABASE_URL
+        sync: false
+      - key: DB_SSL
+        value: "true"
+      - key: DB_SSL_REJECT_UNAUTHORIZED
+        value: "true"
+      - key: POSTGRES_REQUIRED_MAJOR
+        value: "18"
+      - key: TRUST_PROXY
+        value: "1"
+      - key: UPLOAD_DIR
+        value: /tmp/uploads
+      - key: JWT_SECRET
+        generateValue: true
+      - key: LIFF_ID
+        sync: false
+      - key: LINE_LOGIN_CHANNEL_ID
+        sync: false
+      - key: LINE_CHANNEL_SECRET
+        sync: false
+      - key: LINE_CHANNEL_ACCESS_TOKEN
+        sync: false
+
+# ฐานข้อมูลย้ายไปใช้ Neon (external) แล้ว จึงไม่ประกาศ databases: ที่นี่
+# ตั้ง DATABASE_URL ด้วย connection string ของ Neon ใน Render Dashboard

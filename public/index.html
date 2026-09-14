@@ -1,0 +1,373 @@
+<!doctype html>
+<html lang="th">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width,initial-scale=1,viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#07564d" />
+    <title>เทศบาลนครสุราษฎร์ธานี</title>
+    <link rel="stylesheet" href="/styles.css?v=20260821-remove-image-1" />
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      crossorigin="anonymous"
+    />
+    <script
+      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+      crossorigin="anonymous"
+    ></script>
+    <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+    <script type="module" src="/app.js?v=20260821-due-date-2"></script>
+  </head>
+  <body class="citizen-v3-body">
+    <header class="citizen-header">
+      <div class="citizen-brand">
+        <img
+            class="citizen-logo"
+            src="./assets/suratcity-logo-bigsize-w5983xh5983-trans.png"
+            
+            alt="เทศบาลนครสุราษฎร์ธานี"/>
+            <!--img
+            class="citizen-logo"
+            src="./assets/suratcity-logo-bigsize-w5983xh5983-trans.png"
+            
+            alt="เทศบาลนครสุราษฎร์ธานี"/-->
+        <div>
+          <strong>เทศบาลนครสุราษฎร์ธานี</strong>
+        </div>
+      </div>
+      <div class="line-status">
+        <img
+          id="lineProfileImage"
+          class="line-profile-image hidden"
+          alt="รูปโปรไฟล์ LINE"
+          referrerpolicy="no-referrer"
+        /><span id="lineFallbackIcon" class="line-dot">LINE</span>
+        <div>
+          <b>เชื่อมต่อผ่าน LINE OA</b
+          ><small id="userGreeting">กำลังเชื่อมต่อ LINE…</small>
+        </div>
+      </div>
+    </header>
+
+    <main class="citizen-shell">
+      <section class="citizen-hero">
+        <div class="hero-copy">
+          <h2>แจ้งปัญหากับนครสุราษฎร์ธานี<br /><span>ง่าย รวดเร็ว โปร่งใส</span></h2>
+          <p>
+            ส่งเรื่องร้องเรียนพร้อมรูปภาพและพิกัด
+            เจ้าหน้าที่รับเรื่องผ่านระบบกลาง และติดตามผลได้ทุกขั้นตอนใน LINE OA
+          </p>
+          <div class="hero-actions">
+            <button class="hero-primary" data-open-tab="formPanel">
+              แจ้งเรื่องร้องเรียน</button
+            ><button class="hero-secondary" data-open-tab="historyPanel">
+              ติดตามสถานะ
+            </button>
+          </div>
+        </div>
+        <div class="hero-visual">
+          <div class="city-skyline">
+            <i></i><i></i><i></i><i></i><i></i><i></i>
+          </div>
+          <div class="smart-phone">
+            <div class="phone-top"></div>
+            <div class="phone-screen">
+              <span class="success-orbit">✓</span><b>รับเรื่องสำเร็จ</b
+              ><small>CMP-20260714-000128</small>
+              <div class="phone-progress"><i></i><i></i><i></i><i></i></div>
+            </div>
+          </div>
+          <div class="floating-card map-float">⌖ พิกัดแม่นยำ</div>
+          <div class="floating-card photo-float">▧ แนบรูปภาพ</div>
+          <div class="floating-card track-float">◷ ติดตาม 24 ชม.</div>
+        </div>
+      </section>
+
+      <section class="trust-grid">
+        <article>
+          <span>01</span>
+          <div>
+            <b>แจ้งเรื่องได้ตลอด 24 ชั่วโมง</b
+            ><small>เปิดผ่าน Rich Menu ใน LINE OA</small>
+          </div>
+        </article>
+        <article>
+          <span>02</span>
+          <div>
+            <b>ข้อมูลปลอดภัย</b><small>ตรวจสอบตัวตนผ่าน LINE Login</small>
+          </div>
+        </article>
+        <article>
+          <span>03</span>
+          <div>
+            <b>รู้สถานะทุกขั้นตอน</b><small>แจ้งเตือนกลับผ่าน LINE OA</small>
+          </div>
+        </article>
+      </section>
+
+      <div id="alert" class="alert hidden" role="alert"></div>
+      <nav class="citizen-tabs" aria-label="เมนูหลัก">
+        <button type="button" class="tab active" data-tab="formPanel">
+          <span>＋</span> แจ้งเรื่อง</button
+        ><button type="button" class="tab" data-tab="historyPanel">
+          <span>◷</span> ติดตามเรื่อง
+        </button>
+      </nav>
+
+      <section id="formPanel" class="citizen-panel panel">
+        <div class="panel-intro">
+          <div>
+            <p class="overline">COMPLAINT FORM</p>
+            <h2>แจ้งเรื่องร้องเรียน</h2>
+            <p>
+              กรอกข้อมูลให้ครบถ้วน
+              เพื่อให้หน่วยงานตรวจสอบและเข้าดำเนินการได้รวดเร็ว
+            </p>
+          </div>
+          <div class="form-progress">
+            <span class="active"><i>1</i>ข้อมูลเรื่อง</span
+            ><span><i>2</i>รูปภาพ</span><span><i>3</i>พิกัด</span
+            ><span><i>4</i>ยืนยัน</span>
+          </div>
+        </div>
+        <form id="complaintForm" class="smart-form" novalidate>
+          <section class="form-section">
+            <div class="section-number">01</div>
+            <div class="section-body">
+              <h3>รายละเอียดเรื่องร้องเรียน</h3>
+              <div class="form-grid">
+                <label>
+                  <span class="field-label">
+                    หมวดหมู่ <span class="required" aria-hidden="true">*</span>
+                  </span>
+                  <select id="categoryId" required>
+                    <option value="">กำลังโหลดหมวดหมู่…</option>
+                  </select>
+                </label>
+                <label>
+                  <span class="field-label">
+                    หัวข้อ <span class="required" aria-hidden="true">*</span>
+                  </span>
+                  <input
+                    id="title"
+                    maxlength="200"
+                    required
+                    placeholder="เช่น ไฟส่องสว่างดับ"
+                  />
+                </label>
+              </div>
+              <label>
+                <span class="field-label">รายละเอียด</span>
+                <textarea
+                  id="description"
+                  maxlength="5000"
+                  placeholder="อธิบายปัญหา จุดสังเกต และช่วงเวลาที่พบ"
+                ></textarea>
+              </label>
+            </div>
+          </section>
+
+          <section class="form-section">
+            <div class="section-number">02</div>
+            <div class="section-body">
+              <h3>รูปภาพประกอบ <span class="required" aria-hidden="true">*</span></h3>
+              <p id="imageHelp" class="form-help">
+                แนบภาพที่เห็นจุดเกิดเหตุชัดเจน
+              </p>
+              <div class="image-source-actions">
+                <label class="file-picker image-source-camera"
+                  ><span class="upload-icon" aria-hidden="true">📷</span
+                  ><b>ถ่ายรูป</b
+                  ><small>เปิดกล้องหลังบนมือถือ</small
+                  ><input
+                    id="cameraImages"
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                /></label>
+                <label class="file-picker image-source-gallery"
+                  ><img
+                      class="gallery-icon"
+                      src="./assets/gallery.png"
+                      alt="เทศบาลนครสุราษฎร์ธานี"/><b>เลือกรูปจากเครื่อง</b><small>JPEG, PNG, WebP, HEIC</small
+                  >
+                  <!--img
+                      class="gallery-icon"
+                      src="./assets/gallery.png"
+                      alt="เทศบาลนครสุราษฎร์ธานี"/><b>เลือกรูปจากเครื่อง</b><small>JPEG, PNG, WebP, HEIC</small
+                      -->
+                  <input
+                    id="images"
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
+                    multiple
+                    required
+                /></label>
+              </div>
+              <div id="imagePreview" class="image-preview"></div>
+            </div>
+          </section>
+
+          <section class="form-section">
+            <div class="section-number">03</div>
+            <div class="section-body">
+              <h3>สถานที่และพิกัด</h3>
+              <label
+                >สถานที่เกิดเหตุ <textarea
+                  id="locationText"
+                  maxlength="500"
+                  placeholder="บ้านเลขที่ ถนน ซอย หรือสถานที่ใกล้เคียง"
+                ></textarea>
+              </label>
+              <div class="location-row">
+                <button
+                  id="getLocationButton"
+                  class="smart-secondary"
+                  type="button"
+                >
+                  ⌖ ใช้ตำแหน่งปัจจุบัน</button
+                ><button
+                  id="pickLocationButton"
+                  class="smart-secondary"
+                  type="button"
+                >
+                  📍 ปักหมุดบนแผนที่</button
+                ><span id="locationStatus" class="form-help"
+                  >แตะบนแผนที่เพื่อปักหมุด</span
+                >
+              </div>
+              <div class="form-grid coordinate-grid">
+                <label
+                  >Latitude<input
+                    id="latitude"
+                    inputmode="decimal"
+                    placeholder="7.890123" /></label
+                ><label
+                  >Longitude<input
+                    id="longitude"
+                    inputmode="decimal"
+                    placeholder="98.123456"
+                /></label>
+              </div>
+              <div id="mapPanel" class="map-panel">
+                <div
+                  id="mapView"
+                  role="application"
+                  aria-label="แผนที่สำหรับปักหมุดตำแหน่งเรื่องร้องเรียน"
+                ></div>
+                <p class="form-help">
+                  แตะตำแหน่งบนแผนที่เพื่อวางหมุด แล้วลากหมุดเพื่อปรับจุด
+                </p>
+                <a
+                  id="openMap"
+                  class="smart-secondary link-button hidden"
+                  target="_blank"
+                  rel="noopener"
+                  >เปิดตำแหน่งใน OpenStreetMap</a
+                >
+              </div>
+            </div>
+          </section>
+
+          <section class="form-section">
+            <div class="section-number">04</div>
+            <div class="section-body">
+              <h3>ข้อมูลผู้ติดต่อ</h3>
+              <div class="form-grid">
+                <label>
+                  <span class="field-label">
+                    ชื่อผู้ติดต่อ <span class="required" aria-hidden="true">*</span>
+                  </span>
+                  <input id="contactName" maxlength="200" autocomplete="name" readonly required />
+                </label>
+                <label>
+                  <span class="field-label">
+                    เบอร์โทรศัพท์ <span class="required" aria-hidden="true">*</span>
+                  </span>
+                  <input
+                    id="contactPhone"
+                    maxlength="20"
+                    inputmode="tel"
+                    required
+                  />
+                </label>
+              </div>
+              <label>
+                <span class="field-label">อีเมล (ไม่บังคับ)</span>
+                <input
+                  id="contactEmail"
+                  maxlength="254"
+                  inputmode="email"
+                />
+              </label><label class="consent"
+                ><input id="privacyConsent" type="checkbox" required /><span
+                  >ข้าพเจ้าอ่านและยอมรับ
+                  <a
+                    id="privacyLink"
+                    href="/privacy.html"
+                    target="_blank"
+                    rel="noopener"
+                    >ประกาศความเป็นส่วนตัว</a
+                  ></span
+                ></label
+              ><button id="submitButton" class="smart-submit" type="submit">
+                ยืนยันและส่งเรื่องร้องเรียน <span>→</span>
+              </button>
+            </div>
+          </section>
+        </form>
+        <section id="successCard" class="success-card hidden">
+          <div class="success-check">✓</div>
+          <p>ส่งข้อมูลสำเร็จ</p>
+          <h2>หน่วยงานได้รับเรื่องของคุณแล้ว</h2>
+          <strong id="successReference"></strong
+          ><small id="successNotice"
+            >ระบบจะส่งข้อความแจ้งเตือนผ่าน LINE OA
+            เมื่อสถานะมีการเปลี่ยนแปลง</small
+          ><button
+            id="newComplaintButton"
+            class="smart-secondary"
+            type="button"
+          >
+            แจ้งเรื่องใหม่
+          </button>
+        </section>
+      </section>
+
+      <section id="historyPanel" class="citizen-panel panel hidden">
+        <div class="panel-header">
+          <div>
+            <p class="overline">MY COMPLAINTS</p>
+            <h2>ติดตามเรื่องของฉัน</h2>
+            <p id="historyDescription">ตรวจสอบสถานะเรื่องร้องเรียนที่ส่งผ่านบัญชี LINE นี้</p>
+          </div>
+          <button id="refreshButton" class="smart-secondary" type="button">
+            ↻ รีเฟรช
+          </button>
+        </div>
+        <div id="complaintList" class="cards">
+          <p class="form-help">กำลังโหลดข้อมูล…</p>
+        </div>
+      </section>
+    </main>
+    <footer class="citizen-footer">
+      <div>
+        <b>Smart City Citizen Service</b><span>บริการประชาชนผ่าน LINE OA</span>
+      </div>
+      <small>ข้อมูลของท่านได้รับการคุ้มครองตามนโยบายของหน่วยงาน</small>
+    </footer>
+    <dialog id="imageViewer" class="image-viewer" aria-labelledby="imageViewerTitle">
+      <div class="image-viewer-panel">
+        <header>
+          <h2 id="imageViewerTitle">ดูรูปภาพ</h2>
+          <button id="imageViewerClose" class="image-viewer-close" type="button" aria-label="ปิดรูปภาพ">×</button>
+        </header>
+        <img id="imageViewerImage" alt="" />
+        <p id="imageViewerCaption"></p>
+      </div>
+    </dialog>
+  </body>
+</html>

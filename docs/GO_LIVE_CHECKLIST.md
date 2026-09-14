@@ -1,0 +1,15 @@
+# Go-live checklist
+- [ ] Production domain and TLS certificate approved
+- [ ] PostgreSQL has private IP only and least-privilege account
+- [ ] Secrets are not committed to source control
+- [ ] LINE Login and Messaging API channels are under the same Provider
+- [ ] Webhook signature verification and webhook Verify pass
+- [ ] Google Maps key restricted by referrer and API
+- [ ] Privacy notice, consent text, retention period and DPO contact approved
+- [ ] Backup and restore tested successfully
+- [ ] Monitoring, alerting, log retention and time synchronization enabled
+- [ ] VA/PT and dependency scan completed; critical/high findings resolved
+- [ ] Load test completed against expected concurrent users
+- [ ] Incident response, RPO/RTO and DR owner documented
+- [ ] User roles and administrator accounts reviewed
+- [ ] UAT and business owner sign-off completed

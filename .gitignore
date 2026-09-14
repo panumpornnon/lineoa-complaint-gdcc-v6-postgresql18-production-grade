@@ -1,0 +1,24 @@
+node_modules/
+
+.env*
+!.env.example
+!.env.production.example
+
+*.log
+coverage/
+.DS_Store
+
+uploads/
+backups/
+
+/backup_*.sql
+/backup_*.dump
+/*.bak
+/migration-error.txt
+
+# ไฟล์สำรองที่สร้างระหว่างแก้งาน (เช่น admin.js.bak-lineid)
+*.bak-*
+*.bak
+
+# โฟลเดอร์พักไฟล์รอลบ
+_to_delete/

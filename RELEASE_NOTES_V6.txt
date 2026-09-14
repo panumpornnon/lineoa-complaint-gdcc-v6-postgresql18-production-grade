@@ -1,0 +1,21 @@
+LINE OA Complaint GDCC v6.0.0 — PostgreSQL 18
+
+Key changes:
+- PostgreSQL Docker image upgraded to postgres:18-alpine
+- PostgreSQL 18 PGDATA set to /var/lib/postgresql/18/docker
+- Persistent volume mounted at /var/lib/postgresql
+- New postgres18_data volume prevents accidental reuse of PostgreSQL 16 data directory
+- Backend enforces PostgreSQL major version 18 at startup
+- Health endpoints report database version
+- Added PostgreSQL 16 -> 18 dump/restore guide
+
+Validation completed:
+- npm test: passed
+- JavaScript syntax checks: passed
+- npm audit: 0 vulnerabilities
+- Docker Compose YAML/static assertions: passed
+
+Not executed in this build environment:
+- Docker image pull/build
+- Live PostgreSQL 18 migrations
+- End-to-end LINE OA/LIFF test
