@@ -57,11 +57,24 @@ app.use((req, res, next) => {
 
 // Webhook ต้องตรวจลายเซ็นจาก raw request body ก่อน express.json()
 app.use('/webhook', express.raw({ type: 'application/json', limit: '1mb' }), webhookRouter);
-
+/*
 app.use(cors({
   origin(origin, callback) {
     if (!origin || config.corsOrigins.includes(origin)) return callback(null, true);
     return callback(new Error('Origin not allowed by CORS'));
+  },
+  methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['content-type', 'authorization', 'x-request-id', 'x-dev-user-id', 'x-dev-display-name'],
+  maxAge: 600,
+}));
+*/
+const allowedOrigins = new Set(config.corsOrigins);
+
+app.use('/api', cors({
+  origin(origin, callback) {
+    if (!origin || allowedOrigins.has(origin)) return callback(null, true);
+    logger.info('cors_origin_rejected', { origin });
+    return callback(null, false); // ไม่ throw error จะได้ไม่เป็น 500
   },
   methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['content-type', 'authorization', 'x-request-id', 'x-dev-user-id', 'x-dev-display-name'],
