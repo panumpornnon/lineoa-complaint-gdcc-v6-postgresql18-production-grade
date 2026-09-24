@@ -216,8 +216,18 @@ function closeLogoutConfirmation() {
   const dialog = $("#logoutConfirmDialog");
   if (dialog.open) dialog.close("cancel");
 }
-function confirmLogout() {
+async function confirmLogout() {
   closeLogoutConfirmation();
+
+  // ต้องแจ้งเซิร์ฟเวอร์ให้ยกเลิกเซสชันจริง ไม่ใช่แค่ลบ token ทิ้งจากเบราว์เซอร์
+  // เพราะระบบอนุญาตให้ใช้งานได้ครั้งละหนึ่งเครื่อง ถ้าเซสชันเดิมยังค้างอยู่
+  // เจ้าตัวจะเข้าสู่ระบบใหม่ไม่ได้จนกว่าเซสชันนั้นจะหมดอายุ
+  try {
+    await api("/api/admin/logout", { method: "POST" });
+  } catch {
+    // ต่อเซิร์ฟเวอร์ไม่ได้ก็ยังต้องออกจากระบบฝั่งเบราว์เซอร์ให้สำเร็จ
+  }
+
   logout();
 }
 async function loadMe() {
@@ -2039,13 +2049,6 @@ $("#loginForm").onsubmit = async (e) => {
     sessionStorage.setItem("adminToken", token);
     appView(r.data.user);
     await boot();
-    if (r.data.supersededSessions > 0) {
-      show(
-        "#pageAlert",
-        "บัญชีนี้ถูกใช้งานอยู่ที่เครื่องอื่น ระบบได้ออกจากระบบให้เครื่องนั้นแล้ว",
-        "warning",
-      );
-    }
   } catch (err) {
     show("#adminAlert", err.message);
   }
@@ -2064,6 +2067,31 @@ $("#logoutButton").onclick = openLogoutConfirmation;
 $("#mobileLogoutButton").onclick = openLogoutConfirmation;
 $("#logoutCancelButton").onclick = closeLogoutConfirmation;
 $("#logoutConfirmButton").onclick = confirmLogout;
+
+// แจ้งเซิร์ฟเวอร์เมื่อหน้าจอกำลังถูกปิด เพื่อให้บัญชีว่างลงภายในไม่กี่วินาที
+// แทนที่จะต้องรอครบเกณฑ์ไม่มีความเคลื่อนไหวหกสิบนาที
+//
+// ใช้ pagehide ไม่ใช่ beforeunload หรือ unload เพราะเป็นเหตุการณ์เดียวที่
+// เบราว์เซอร์สมัยใหม่รับประกันว่าจะยิงทั้งบนเดสก์ท็อปและมือถือ
+//
+// ใช้ sendBeacon เพราะ fetch ปกติจะถูกยกเลิกกลางคันเมื่อหน้าจอถูกทำลาย
+// ข้อจำกัดของ sendBeacon คือตั้งส่วนหัวของคำขอเองไม่ได้ จึงแนบ token ไปในเนื้อคำขอแทน
+//
+// เหตุการณ์นี้เกิดตอนกดรีเฟรชด้วย เซิร์ฟเวอร์จึงเพียงทำเครื่องหมายไว้ ไม่ได้ยกเลิกทันที
+// ถ้าเป็นการรีเฟรช คำขอแรกหลังโหลดเสร็จจะล้างเครื่องหมายให้เอง
+window.addEventListener("pagehide", (event) => {
+  // persisted = true คือหน้าถูกพักไว้ในแคชเพื่อกดย้อนกลับ ยังไม่ได้ปิดจริง
+  if (event.persisted || !token) return;
+
+  try {
+    navigator.sendBeacon(
+      "/api/admin/session/closing",
+      new Blob([JSON.stringify({ token })], { type: "application/json" }),
+    );
+  } catch {
+    // เบราว์เซอร์เก่าที่ไม่มี sendBeacon จะตกไปใช้เกณฑ์หกสิบนาทีตามเดิม
+  }
+});
 logoutConfirmDialog.addEventListener("cancel", (e) => {
   e.preventDefault();
   closeLogoutConfirmation();
@@ -2240,7 +2268,10 @@ function transferPreviewHtml(plan) {
 
   return `
     <div class="transfer-preview-head">
-      <h3>ตัวอย่างการนำเข้า ${escapeHtml(plan.label)} ทั้งหมด ${plan.total} แถว</h3>
+      <div>
+        <p class="transfer-detected">ตรวจพบว่าเป็นไฟล์ของชุด <b>${escapeHtml(plan.label)}</b></p>
+        <h3>ตัวอย่างการนำเข้าทั้งหมด ${plan.total} แถว</h3>
+      </div>
       <div class="transfer-chips">${chips}</div>
     </div>
     ${
@@ -2259,7 +2290,6 @@ function transferPreviewHtml(plan) {
 }
 
 async function previewGovernanceImport() {
-  const dataset = transferSelectedDataset();
   const input = $("#transferFile");
   const file = input?.files?.[0];
   clear("#transferAlert");
@@ -2283,10 +2313,11 @@ async function previewGovernanceImport() {
     const csv = await file.text();
     const r = await api("/api/admin/governance/import/preview", {
       method: "POST",
-      body: JSON.stringify({ dataset, csv }),
+      body: JSON.stringify({ csv }),
     });
     transferPendingCsv = csv;
-    transferPendingDataset = dataset;
+    // ชุดข้อมูลมาจากการตรวจจับหัวตารางฝั่งเซิร์ฟเวอร์ ไม่ใช่จากดรอปดาวน์
+    transferPendingDataset = r.data.dataset;
     $("#transferPreview").innerHTML = transferPreviewHtml(r.data);
     $("#transferConfirmButton").onclick = () => confirmGovernanceImport();
     $("#transferCancelButton").onclick = () => resetTransferPanel();
@@ -2310,8 +2341,8 @@ async function confirmGovernanceImport() {
     const r = await api("/api/admin/governance/import/commit", {
       method: "POST",
       body: JSON.stringify({
-        dataset: transferPendingDataset,
         csv: transferPendingCsv,
+        expectedDataset: transferPendingDataset,
       }),
     });
     const generated = r.data.generatedPasswords ?? [];

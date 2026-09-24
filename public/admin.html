@@ -9,7 +9,7 @@
     <meta name="theme-color" content="#083f3a" />
     <title>Smart City Complaint Command Center</title>
     <link rel="stylesheet" href="/styles.css?v=20260727-image-viewer-1" />
-    <link rel="stylesheet" href="/admin-v3.css?v=20260924-user-transfer-1" />
+    <link rel="stylesheet" href="/admin-v3.css?v=20260924-session-close-1" />
     <link
       rel="stylesheet"
       href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
@@ -19,7 +19,7 @@
       src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
       crossorigin="anonymous"
     ></script>
-    <script type="module" src="/admin.js?v=20260924-user-transfer-1"></script>
+    <script type="module" src="/admin.js?v=20260924-session-close-1"></script>
   </head>
   <body class="admin-v3-body">
     <section id="loginPanel" class="v3-login">
@@ -528,7 +528,7 @@
             </div>
             <div class="transfer-body">
               <label class="transfer-dataset">
-                <span>Select Data Set</span>
+                <span>Select Data Set (สำหรับส่งออกเท่านั้น)</span>
                 <select id="transferDataset">
                   <option value="departments">หน่วยงาน</option>
                   <option value="categories">หมวดหมู่และ SLA</option>
@@ -551,7 +551,8 @@
                 <div class="transfer-card">
                   <h3>Import from CSV File</h3>
                   <p>
-                    ระบบจะแสดงตัวอย่างให้ตรวจก่อนเสมอ
+                    ไม่ต้องเลือกชุดข้อมูล ระบบดูจากหัวตารางในไฟล์เองว่าเป็นข้อมูลส่วนใด
+                    และจะแสดงตัวอย่างให้ตรวจก่อนเสมอ
                     ยังไม่บันทึกลงฐานข้อมูลจนกว่าจะกดยืนยัน
                   </p>
                   <input

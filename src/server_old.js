@@ -31,15 +31,15 @@ app.use(
       useDefaults: true,
       directives: {
         defaultSrc: ["'self'"],
-        scriptSrc: ["'self'", 'https://static.line-scdn.net', 'https://unpkg.com'],
-        "connect-src": ["'self'", "https://api.line.me", "https://access.line.me", "https://liff.line.me", "https://*.line.me", "https://*.line-scdn.net"],
-        "img-src": ["'self'", 'data:', 'blob:', 'https://profile.line-scdn.net', 'https://*.line-scdn.net', 'https://*.tile.openstreetmap.org', 'https://tile.openstreetmap.org', 'https://unpkg.com'],
-        "frame-src": ["'self'", "https://access.line.me", "https://liff.line.me", "https://*.line.me"],
+        scriptSrc: ["'self'", 'https://line-scdn.net', 'https://unpkg.com'],
+        "connect-src": ["'self'", "https://line.me", "https://line.me", "https://line.me", "https://*.line.me", "https://*.line-scdn.net"],
+        "img-src": ["'self'", 'data:', 'blob:', 'https://line-scdn.net', 'https://*.line-scdn.net', 'https://*.tile.openstreetmap.org', 'https://openstreetmap.org', 'https://unpkg.com'],
+        "frame-src": ["'self'", "https://line.me", "https://line.me", "https://*.line.me"],
         "style-src": ["'self'", 'https://unpkg.com'],
         "font-src": ["'self'", 'data:'],
         "object-src": ["'none'"],
         "base-uri": ["'self'"],
-        "frame-ancestors": ["'self'", 'https://access.line.me'],
+        "frame-ancestors": ["'self'", 'https://line.me'],
       },
     },
     crossOriginEmbedderPolicy: false,
@@ -55,27 +55,12 @@ app.use((req, res, next) => {
   next();
 });
 
-// Webhook ต้องตรวจลายเซ็นจาก raw request body ก่อน express.json()
 app.use('/webhook', express.raw({ type: 'application/json', limit: '1mb' }), webhookRouter);
-/*
-app.use(cors({
-  origin(origin, callback) {
-    if (!origin || config.corsOrigins.includes(origin)) return callback(null, true);
-    return callback(new Error('Origin not allowed by CORS'));
-  },
-  methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['content-type', 'authorization', 'x-request-id', 'x-dev-user-id', 'x-dev-display-name'],
-  maxAge: 600,
-}));
-*/
-const allowedOrigins = new Set(config.corsOrigins);
 
-app.use('/api', cors({
-  origin(origin, callback) {
-    if (!origin || allowedOrigins.has(origin)) return callback(null, true);
-    logger.info('cors_origin_rejected', { origin });
-    return callback(null, false); // ไม่ throw error จะได้ไม่เป็น 500
-  },
+// 🚨 ปรับแต่ง CORS: ยอมรับ Request จากภายนอกที่วิ่งผ่านมาทาง IIS Proxy
+app.use(cors({
+  origin: true, 
+  credentials: true,
   methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['content-type', 'authorization', 'x-request-id', 'x-dev-user-id', 'x-dev-display-name'],
   maxAge: 600,
@@ -111,6 +96,7 @@ app.get('/health', async (req, res) => {
   res.json({ status: 'ok', databaseTime: db.now, databaseVersion: db.server_version, databaseMajor: db.server_major, environment: config.nodeEnv });
 });
 
+// กลับมาใช้ Route พาสหลักแบบดั้งเดิม ไม่ซ้อนพาสย่อยในโค้ด
 app.use('/api', apiLimiter);
 app.use('/api', publicRouter);
 app.use('/api/complaints', complaintsRouter);
