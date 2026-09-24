@@ -2677,3 +2677,41 @@ a.map-link-button:visited{
     flex: 1;
   }
 }
+
+/* ===== แจ้งเตือนระดับเตือน (20260924-single-session-1) =====
+   styles.css มีแค่ .alert (แดง = ข้อผิดพลาด) กับ .alert.success (เขียว)
+   ข้อความอย่าง "ระบบได้ออกจากระบบให้เครื่องอื่นแล้ว" ไม่ใช่ข้อผิดพลาด
+   แต่ก็ไม่ใช่เรื่องสำเร็จ จึงเพิ่มระดับกลางเป็นสีเหลืองอำพัน */
+.alert.warning {
+  border-color: #f0d9a4;
+  background: #fdf6e6;
+  color: #8a6212;
+}
+
+/* ===== รหัสผ่านชั่วคราวหลังนำเข้าบัญชีผู้ใช้งาน (20260924-user-transfer-1) ===== */
+.transfer-password-box {
+  margin-top: 18px;
+  padding: 18px;
+  border: 1px solid #f0d9a4;
+  border-radius: 16px;
+  background: #fdf9ef;
+}
+.transfer-password-box h3 {
+  margin: 0 0 6px;
+  font-size: 1rem;
+  color: #8a6212;
+}
+.transfer-password-box p {
+  margin: 0 0 12px;
+  color: #7d6534;
+  font-size: 0.85rem;
+  line-height: 1.6;
+}
+.temp-password {
+  font-family: "Cascadia Mono", Consolas, "Courier New", monospace;
+  font-size: 0.95rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  -webkit-user-select: all;
+  user-select: all;
+}
