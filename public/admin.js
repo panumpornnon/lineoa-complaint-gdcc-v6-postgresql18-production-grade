@@ -70,7 +70,11 @@ async function api(path, opt = {}) {
   if (token) h.set("authorization", `Bearer ${token}`);
   const r = await fetch(path, { ...opt, headers: h });
   const j = await r.json().catch(() => ({}));
-  if (r.status === 401 && path != "/api/admin/login") logout();
+  if (r.status === 401 && path != "/api/admin/login") {
+    // ส่งเหตุผลไปแสดงที่หน้าเข้าสู่ระบบ เช่นถูกเข้าสู่ระบบจากเครื่องอื่น
+    // หรือบัญชีถูกปิดใช้งาน จะได้ไม่เห็นแค่หน้าล็อกอินเปล่าๆ โดยไม่รู้สาเหตุ
+    logout(j.sessionReason ? j.message : "");
+  }
   if (!r.ok) throw new Error(j.message || `เกิดข้อผิดพลาด ${r.status}`);
   return j;
 }
@@ -196,11 +200,13 @@ function appView(user) {
   $("#userStatusCard").classList.toggle("hidden", !showUserInsights);
   $("#topUserDepartmentsCard").classList.toggle("hidden", !showUserInsights);
 }
-function logout() {
+function logout(reasonMessage = "") {
   token = null;
   executiveDepartmentId = "";
   sessionStorage.removeItem("adminToken");
   loginView();
+  if (reasonMessage) show("#adminAlert", reasonMessage);
+  else clear("#adminAlert");
 }
 function openLogoutConfirmation() {
   const dialog = $("#logoutConfirmDialog");
@@ -221,7 +227,9 @@ async function loadMe() {
     appView(r.data);
     await boot();
   } catch {
-    logout();
+    // api() เรียก logout พร้อมเหตุผลไปแล้วถ้าเป็นกรณีเซสชันสิ้นสุด
+    // ตรงนี้จึงไม่เรียกซ้ำ เพื่อไม่ให้ข้อความที่เพิ่งแสดงถูกล้างทิ้ง
+    if (token) logout();
   }
 }
 function switchView(name) {
@@ -319,10 +327,11 @@ function applyRoleVisibility() {
   const isElevated =
     isSystemAdmin() || currentUser?.role === "supervisor" || isExecutive();
   const isAdmin = isSystemAdmin();
-  const isDev = currentUser?.role === "dev";
+  // admin เป็นตำแหน่งรองจาก dev และมีสิทธิ์จัดการทำเนียบเจ้าหน้าที่เท่ากัน
+  const canManageStaffProfiles = isSystemAdmin();
   if (
     (!isAdmin && governanceMode === "users") ||
-    (!isDev && governanceMode === "staffProfiles")
+    (!canManageStaffProfiles && governanceMode === "staffProfiles")
   )
     governanceMode = "categories";
 
@@ -340,13 +349,13 @@ function applyRoleVisibility() {
     ?.classList.toggle("hidden", !isAdmin);
   document
     .querySelector('.governance-tab[data-governance="staffProfiles"]')
-    ?.classList.toggle("hidden", !isDev);
+    ?.classList.toggle("hidden", !canManageStaffProfiles);
 
   // เฉพาะ Admin เพิ่ม/แก้ไขหมวดหมู่ หน่วยงาน และผู้ใช้งาน
   $("#addCategoryButton")?.classList.toggle("hidden", !isAdmin);
   $("#addDepartmentButton")?.classList.toggle("hidden", !isAdmin);
   $("#addUserButton")?.classList.toggle("hidden", !isAdmin);
-  $("#addStaffProfileButton")?.classList.toggle("hidden", !isDev);
+  $("#addStaffProfileButton")?.classList.toggle("hidden", !canManageStaffProfiles);
   document
     .querySelectorAll("[data-admin-only]")
     .forEach((el) => el.classList.toggle("hidden", !isAdmin));
@@ -1466,8 +1475,8 @@ async function loadGovernance(mode = "categories") {
         );
     }
     if (mode === "staffProfiles") {
-      if (currentUser?.role !== "dev") {
-        throw new Error("เฉพาะ DEV เท่านั้นที่ดูข้อมูลเจ้าหน้าที่ได้");
+      if (!isSystemAdmin()) {
+        throw new Error("เฉพาะ Admin และ DEV เท่านั้นที่ดูข้อมูลเจ้าหน้าที่ได้");
       }
       const params = new URLSearchParams();
       if (staffProfileDepartmentId)
@@ -1575,8 +1584,8 @@ function staffProfileDepartmentField(data = null) {
   return `<label>หน่วยงานต้นสังกัด<select id="staffProfileDepartment" name="departmentId" required>${options}</select><small id="staffProfileDepartmentPreview" class="muted">${selectedDepartment ? `หน่วยงานที่เลือก: ${escapeHtml(selectedDepartment.name_th)}` : "กรุณาเลือกหน่วยงานของเจ้าหน้าที่"}</small></label>`;
 }
 function openGovernanceDialog(type, data = null) {
-  if (type === "staffProfile" && currentUser?.role !== "dev") {
-    show("#pageAlert", "เฉพาะ DEV เท่านั้นที่จัดการข้อมูลเจ้าหน้าที่ได้");
+  if (type === "staffProfile" && !isSystemAdmin()) {
+    show("#pageAlert", "เฉพาะ Admin และ DEV เท่านั้นที่จัดการข้อมูลเจ้าหน้าที่ได้");
     return;
   }
   if (
@@ -1729,11 +1738,8 @@ function openGovernanceDialog(type, data = null) {
   $("#governanceDialog").showModal();
 }
 async function saveGovernance() {
-  if (
-    governanceEditing?.type === "staffProfile" &&
-    currentUser?.role !== "dev"
-  ) {
-    throw new Error("เฉพาะ DEV เท่านั้นที่จัดการข้อมูลเจ้าหน้าที่ได้");
+  if (governanceEditing?.type === "staffProfile" && !isSystemAdmin()) {
+    throw new Error("เฉพาะ Admin และ DEV เท่านั้นที่จัดการข้อมูลเจ้าหน้าที่ได้");
   }
   if (
     ["department", "category", "user"].includes(governanceEditing?.type) &&
@@ -1994,7 +2000,7 @@ function closeGovernanceDialog() {
 }
 
 $("#addStaffProfileButton").onclick = () => {
-  if (currentUser?.role === "dev") openGovernanceDialog("staffProfile");
+  if (isSystemAdmin()) openGovernanceDialog("staffProfile");
 };
 const lockedGovernanceDialog = $("#governanceDialog");
 lockedGovernanceDialog.addEventListener(
@@ -2033,6 +2039,13 @@ $("#loginForm").onsubmit = async (e) => {
     sessionStorage.setItem("adminToken", token);
     appView(r.data.user);
     await boot();
+    if (r.data.supersededSessions > 0) {
+      show(
+        "#pageAlert",
+        "บัญชีนี้ถูกใช้งานอยู่ที่เครื่องอื่น ระบบได้ออกจากระบบให้เครื่องนั้นแล้ว",
+        "warning",
+      );
+    }
   } catch (err) {
     show("#adminAlert", err.message);
   }
@@ -2152,6 +2165,7 @@ const transferDatasetLabels = {
   departments: "หน่วยงาน",
   categories: "หมวดหมู่และ SLA",
   staffProfiles: "ข้อมูลเจ้าหน้าที่",
+  users: "บัญชีผู้ใช้งาน",
 };
 const transferActionLabels = {
   insert: "เพิ่มใหม่",
@@ -2216,9 +2230,8 @@ function transferPreviewHtml(plan) {
     const cells = columns
       .map((name) => `<td>${escapeHtml(row.values[name] ?? "-")}</td>`)
       .join("");
-    const note = row.problems.length
-      ? escapeHtml(row.problems.join(" / "))
-      : "-";
+    const messages = [...row.problems, ...(row.notes ?? [])];
+    const note = messages.length ? escapeHtml(messages.join(" / ")) : "-";
     return `<tr class="transfer-row-${row.action}"><td>${row.line}</td><td><span class="transfer-chip ${row.action}">${transferActionLabels[row.action]}</span></td>${cells}<td>${note}</td></tr>`;
   });
 
@@ -2301,12 +2314,31 @@ async function confirmGovernanceImport() {
         csv: transferPendingCsv,
       }),
     });
+    const generated = r.data.generatedPasswords ?? [];
     resetTransferPanel();
     show(
       "#transferAlert",
       `นำเข้า ${r.data.label} สำเร็จ เพิ่มใหม่ ${r.data.inserted} รายการ อัปเดต ${r.data.updated} รายการ`,
       "success",
     );
+    // รหัสผ่านชั่วคราวแสดงได้ครั้งเดียว ระบบไม่ได้เก็บไว้ที่ใดและเรียกดูย้อนหลังไม่ได้
+    if (generated.length) {
+      $("#transferPreview").innerHTML = `
+        <div class="transfer-password-box">
+          <h3>รหัสผ่านชั่วคราวของบัญชีใหม่ ${generated.length} รายการ</h3>
+          <p>
+            แสดงเพียงครั้งเดียวเท่านั้น ระบบไม่ได้เก็บไว้และเรียกดูย้อนหลังไม่ได้
+            กรุณาคัดลอกส่งให้เจ้าของบัญชีทันที แล้วให้เปลี่ยนรหัสผ่านเมื่อเข้าใช้งานครั้งแรก
+          </p>
+          ${governanceTable(
+            ["ชื่อผู้ใช้", "รหัสผ่านชั่วคราว"],
+            generated.map(
+              (g) =>
+                `<tr><td class="case-ref">${escapeHtml(g.username)}</td><td class="temp-password">${escapeHtml(g.password)}</td></tr>`,
+            ),
+          )}
+        </div>`;
+    }
     // โหลดรายการหน่วยงานใหม่ เพราะดรอปดาวน์ในหน้าจออื่นอ้างอิงค่าชุดนี้
     try {
       const dep = await api("/api/admin/departments");

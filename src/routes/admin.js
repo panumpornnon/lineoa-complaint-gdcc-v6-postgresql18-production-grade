@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
@@ -64,6 +65,17 @@ async function writeAudit(req, action, entityType, entityId = null, detail = {},
   );
 }
 
+// แปลงค่า JWT_EXPIRES_IN เช่น 8h เป็นจำนวนวินาที ใช้ตั้ง expires_at ของเซสชัน
+// ให้ตรงกับอายุของ token เสมอ จะได้ไม่มีกรณีที่อย่างหนึ่งหมดอายุก่อนอีกอย่าง
+function sessionLifetimeSeconds() {
+  const raw = String(config.jwtExpiresIn ?? '8h').trim();
+  if (/^\d+$/.test(raw)) return Number.parseInt(raw, 10);
+  const match = /^(\d+)\s*([smhd])$/i.exec(raw);
+  if (!match) return 8 * 60 * 60;
+  const units = { s: 1, m: 60, h: 60 * 60, d: 24 * 60 * 60 };
+  return Number.parseInt(match[1], 10) * units[match[2].toLowerCase()];
+}
+
 const allowedTransitions = {
   new: ['received', 'in_progress'],
   received: ['assigned', 'in_progress'],
@@ -99,31 +111,84 @@ router.post('/login', async (req, res) => {
     throw new ApiError(401, 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง');
   }
 
-  await pool.query(
-    `UPDATE staff_users SET last_login_at = current_timestamp WHERE id = $1`,
-    [user.id],
-  );
+  // ระบบอนุญาตให้ใช้งานได้ครั้งละหนึ่งเครื่องต่อหนึ่งบัญชี
+  // การเข้าสู่ระบบครั้งใหม่จะยกเลิกเซสชันเดิมทั้งหมดของบัญชีนี้
+  // ทำในทรานแซกชันเดียวกับการสร้างเซสชันใหม่ เพื่อไม่ให้เกิดช่วงที่ไม่มีเซสชันใดเลย
+  const client = await pool.connect();
+  let sessionId;
+  let supersededCount = 0;
 
+  try {
+    await client.query('BEGIN');
+
+    const superseded = await client.query(
+      `UPDATE staff_sessions
+          SET revoked_at = current_timestamp,
+              revoked_reason = 'superseded'
+        WHERE staff_user_id = $1
+          AND revoked_at IS NULL
+          AND expires_at > current_timestamp
+      RETURNING id`,
+      [user.id],
+    );
+    supersededCount = superseded.rowCount;
+
+    const created = await client.query(
+      `INSERT INTO staff_sessions (staff_user_id, expires_at, ip_address, user_agent)
+       VALUES ($1, current_timestamp + make_interval(secs => $2), $3, $4)
+    RETURNING id`,
+      [
+        user.id,
+        sessionLifetimeSeconds(),
+        (req.ip || '').slice(0, 45) || null,
+        (req.get('user-agent') || '').slice(0, 400) || null,
+      ],
+    );
+    sessionId = created.rows[0].id;
+
+    await client.query(
+      `UPDATE staff_users SET last_login_at = current_timestamp WHERE id = $1`,
+      [user.id],
+    );
+
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+
+  // ไม่ใส่ role กับ departmentId ไว้ใน token อีกต่อไป เพราะ middleware อ่านค่าจริง
+  // จากฐานข้อมูลทุกคำขออยู่แล้ว การเก็บซ้ำไว้ใน token มีแต่จะทำให้ค่าล้าสมัย
   const token = jwt.sign(
     {
       username: user.username,
       displayName: user.display_name,
-      role: user.role,
-      departmentId: user.department_id,
     },
     config.jwtSecret,
     {
       subject: user.id,
+      jwtid: sessionId,
       issuer: 'lineoa-complaint-gdcc',
       audience: 'complaint-admin',
       expiresIn: config.jwtExpiresIn,
     },
   );
 
+  // writeAudit อ่านผู้กระทำจาก req.admin ซึ่งเส้นทางนี้ยังไม่ผ่าน middleware
+  // จึงตั้งค่าให้ก่อน (จะ spread req ไม่ได้ เพราะ req.ip และ req.get เป็นเมท็อดของ prototype)
+  req.admin = { id: user.id };
+  await writeAudit(req, 'auth.login', 'staff_user', user.id, {
+    superseded_sessions: supersededCount,
+  });
+
   res.json({
     success: true,
     data: {
       token,
+      // บอกหน้าเว็บว่าการเข้าสู่ระบบครั้งนี้ทำให้เครื่องอื่นหลุดออกไปกี่เครื่อง
+      supersededSessions: supersededCount,
       user: {
         id: user.id,
         username: user.username,
@@ -1582,7 +1647,7 @@ const staffProfileSchema = z.object({
   ),
 });
 
-router.get('/governance/staff-profiles', requireRoles('dev'), async (req, res) => {
+router.get('/governance/staff-profiles', requireRoles('admin', 'dev'), async (req, res) => {
   const parsed = z.object({ departmentId: z.string().uuid().optional() }).safeParse(req.query);
   if (!parsed.success) throw new ApiError(400, 'หน่วยงานที่ใช้กรองไม่ถูกต้อง');
   const values = parsed.data.departmentId ? [parsed.data.departmentId] : [];
@@ -1607,7 +1672,7 @@ router.get('/governance/staff-profiles', requireRoles('dev'), async (req, res) =
   res.json({ success: true, data: result.rows });
 });
 
-router.post('/governance/staff-profiles', requireRoles('dev'), async (req, res) => {
+router.post('/governance/staff-profiles', requireRoles('admin', 'dev'), async (req, res) => {
   const parsed = staffProfileSchema.safeParse(req.body);
   if (!parsed.success) {
     throw new ApiError(400, 'ข้อมูลเจ้าหน้าที่ไม่ถูกต้อง', parsed.error.flatten());
@@ -1649,7 +1714,7 @@ router.post('/governance/staff-profiles', requireRoles('dev'), async (req, res) 
   res.status(201).json({ success: true, data: result.rows[0] });
 });
 
-router.patch('/governance/staff-profiles/:id', requireRoles('dev'), async (req, res) => {
+router.patch('/governance/staff-profiles/:id', requireRoles('admin', 'dev'), async (req, res) => {
   const idResult = z.string().uuid().safeParse(req.params.id);
   if (!idResult.success) throw new ApiError(400, 'รหัสข้อมูลเจ้าหน้าที่ไม่ถูกต้อง');
 
@@ -1702,7 +1767,7 @@ router.patch('/governance/staff-profiles/:id', requireRoles('dev'), async (req, 
   res.json({ success: true, data: result.rows[0] });
 });
 
-router.delete('/governance/staff-profiles/:id', requireRoles('dev'), async (req, res) => {
+router.delete('/governance/staff-profiles/:id', requireRoles('admin', 'dev'), async (req, res) => {
   const idResult = z.string().uuid().safeParse(req.params.id);
   if (!idResult.success) throw new ApiError(400, 'รหัสข้อมูลเจ้าหน้าที่ไม่ถูกต้อง');
 
@@ -2215,7 +2280,45 @@ const TRANSFER_DATASETS = {
                   LEFT JOIN departments d ON d.id = sp.department_id
                  ORDER BY d.code NULLS LAST, sp.full_name`,
   },
+  // บัญชีผู้ใช้งาน ส่งออกได้โดยไม่มีรหัสผ่านเด็ดขาด
+  // คอลัมน์ password ในไฟล์ที่ส่งออกจะว่างเสมอ มีไว้ให้กรอกตอนเพิ่มคนใหม่เท่านั้น
+  users: {
+    label: 'บัญชีผู้ใช้งาน',
+    importable: true,
+    headers: [
+      'username',
+      'display_name',
+      'role',
+      'department_code',
+      'is_active',
+      'password',
+      'last_login_at',
+    ],
+    excelTextColumns: [],
+    selectSql: `SELECT su.username,
+                       su.display_name,
+                       su.role,
+                       d.code AS department_code,
+                       su.is_active,
+                       '' AS password,
+                       su.last_login_at
+                  FROM staff_users su
+                  LEFT JOIN departments d ON d.id = su.department_id
+                 ORDER BY su.role, su.username`,
+  },
 };
+
+const IMPORTABLE_USER_ROLES = ['officer', 'supervisor', 'executive', 'admin'];
+
+// สร้างรหัสผ่านชั่วคราวให้บัญชีใหม่ที่ไม่ได้ระบุรหัสผ่านมาในไฟล์
+// ใช้ตัวอักษรที่อ่านแล้วไม่สับสน ตัด O 0 I l 1 ออก เพราะต้องอ่านให้เจ้าหน้าที่ฟัง
+function generateTemporaryPassword() {
+  const alphabet = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
+  const bytes = crypto.randomBytes(16);
+  let password = '';
+  for (const byte of bytes) password += alphabet[byte % alphabet.length];
+  return password;
+}
 
 function getDataset(name) {
   const dataset = TRANSFER_DATASETS[name];
@@ -2250,7 +2353,7 @@ function parseInteger(value, fallback) {
 // วิเคราะห์ไฟล์ที่อัปโหลด เทียบกับข้อมูลที่มีอยู่ แล้วบอกว่าแต่ละแถวจะเกิดอะไรขึ้น
 // ไม่แตะฐานข้อมูล ใช้ได้ทั้งตอนดูตัวอย่างและตอนยืนยัน
 // ---------------------------------------------------------------------------
-async function analyzeImport(datasetName, csvText) {
+async function analyzeImport(datasetName, csvText, currentUsername = null) {
   const dataset = getDataset(datasetName);
   const table = parseCsv(csvText);
 
@@ -2259,9 +2362,12 @@ async function analyzeImport(datasetName, csvText) {
   }
 
   const headerRow = table[0].map((cell) => unwrapExcelText(cell).trim().toLowerCase());
+  const optionalHeaders = [
+    'is_active', 'sort_order', 'sla_hours', 'department_code',
+    'line_id', 'phone', 'password', 'last_login_at',
+  ];
   const missingHeaders = dataset.headers.filter(
-    (name) => !['is_active', 'sort_order', 'sla_hours', 'department_code', 'line_id', 'phone'].includes(name)
-      && !headerRow.includes(name),
+    (name) => !optionalHeaders.includes(name) && !headerRow.includes(name),
   );
   if (missingHeaders.length) {
     throw new ApiError(
@@ -2298,6 +2404,11 @@ async function analyzeImport(datasetName, csvText) {
   } else if (datasetName === 'categories') {
     const rows = await pool.query(`SELECT code FROM complaint_categories`);
     existingByKey = new Map(rows.rows.map((r) => [r.code, r]));
+  } else if (datasetName === 'users') {
+    const rows = await pool.query(
+      `SELECT lower(username) AS key, username, role FROM staff_users`,
+    );
+    existingByKey = new Map(rows.rows.map((r) => [r.key, r]));
   } else {
     const rows = await pool.query(
       `SELECT sp.full_name, sp.line_id, d.code AS department_code
@@ -2315,6 +2426,8 @@ async function analyzeImport(datasetName, csvText) {
     const row = table[index];
     const lineNumber = index + 1;
     const problems = [];
+    // notes คือสิ่งที่ควรรู้ไว้แต่ไม่ได้ขัดขวางการนำเข้า ต่างจาก problems ที่ทำให้ทั้งไฟล์ถูกปฏิเสธ
+    const notes = [];
     let key = null;
     let values = {};
 
@@ -2354,6 +2467,67 @@ async function analyzeImport(datasetName, csvText) {
         sla_hours: slaHours,
         is_active: isActive,
         sort_order: sortOrder,
+      };
+    } else if (datasetName === 'users') {
+      const username = normalizeText(cell(row, 'username'));
+      const displayName = normalizeText(cell(row, 'display_name'));
+      const role = (normalizeText(cell(row, 'role')) || '').toLowerCase() || null;
+      const departmentCode = normalizeText(cell(row, 'department_code'));
+      const isActive = parseBoolean(cell(row, 'is_active'));
+      const password = normalizeText(cell(row, 'password'));
+
+      key = username ? username.toLowerCase() : null;
+      const existing = key ? existingByKey.get(key) : null;
+
+      if (!username) problems.push('ไม่ได้ระบุชื่อผู้ใช้ (username)');
+      else if (username.length < 3) problems.push('ชื่อผู้ใช้ต้องยาวอย่างน้อย 3 ตัวอักษร');
+      if (!displayName) problems.push('ไม่ได้ระบุชื่อที่แสดง (display_name)');
+      if (isActive === null) problems.push('ค่าสถานะ (is_active) ไม่ถูกต้อง ใช้ได้เฉพาะ true หรือ false');
+
+      if (!role) {
+        problems.push('ไม่ได้ระบุสิทธิ์ (role)');
+      } else if (role === 'dev') {
+        // เหตุผลเดียวกับหน้าจัดการผู้ใช้งาน การนำเข้าไฟล์ต้องไม่กลายเป็น
+        // ช่องทางอ้อมให้ตั้งบัญชีสิทธิ์สูงสุดโดยข้ามการตรวจสอบ
+        problems.push('ไม่สามารถสร้างหรือแก้บัญชีสิทธิ์ DEV ผ่านการนำเข้าไฟล์ได้');
+      } else if (!IMPORTABLE_USER_ROLES.includes(role)) {
+        problems.push(`สิทธิ์ ${role} ไม่ถูกต้อง ใช้ได้เฉพาะ ${IMPORTABLE_USER_ROLES.join(' / ')}`);
+      }
+
+      if (existing?.role === 'dev') {
+        problems.push('บัญชีนี้มีสิทธิ์ DEV อยู่แล้ว จึงแก้ไขผ่านการนำเข้าไฟล์ไม่ได้');
+      }
+
+      // Officer และ Supervisor ต้องสังกัดหน่วยงาน ส่วนสิทธิ์ระดับบริหารดูได้ทุกหน่วยงาน
+      const needsDepartment = ['officer', 'supervisor'].includes(role);
+      if (departmentCode && !departmentIdByCode.has(departmentCode)) {
+        problems.push(`ไม่พบหน่วยงานรหัส ${departmentCode} ในระบบ`);
+      }
+      if (needsDepartment && !departmentCode) {
+        problems.push('สิทธิ์ Officer และ Supervisor ต้องระบุหน่วยงาน (department_code)');
+      }
+
+      if (password && (password.length < 12 || password.length > 200)) {
+        problems.push('รหัสผ่านต้องยาว 12 ถึง 200 ตัวอักษร');
+      }
+      if (!existing && !password) {
+        // ไม่ปฏิเสธ แต่บอกให้รู้ว่าระบบจะตั้งรหัสผ่านชั่วคราวให้และแสดงครั้งเดียว
+        notes.push('ไม่ได้ระบุรหัสผ่าน ระบบจะสร้างรหัสผ่านชั่วคราวให้และแสดงหลังนำเข้าสำเร็จ');
+      }
+
+      // กันไม่ให้ผู้นำเข้าปิดบัญชีตัวเองหรือลดสิทธิ์ตัวเองจนเข้าระบบไม่ได้อีก
+      if (existing && currentUsername && key === currentUsername.toLowerCase()) {
+        if (isActive === false) problems.push('ไม่สามารถปิดใช้งานบัญชีที่กำลังใช้อยู่ได้');
+        if (role && role !== existing.role) problems.push('ไม่สามารถเปลี่ยนสิทธิ์ของบัญชีที่กำลังใช้อยู่ได้');
+      }
+
+      values = {
+        username,
+        display_name: displayName,
+        role,
+        department_code: needsDepartment ? departmentCode : null,
+        is_active: isActive,
+        password,
       };
     } else {
       const fullName = normalizeText(cell(row, 'full_name'));
@@ -2406,7 +2580,7 @@ async function analyzeImport(datasetName, csvText) {
       inserts += 1;
     }
 
-    plan.push({ line: lineNumber, action, values, problems });
+    plan.push({ line: lineNumber, action, values, problems, notes });
   }
 
   return {
@@ -2459,7 +2633,19 @@ router.post('/governance/import/preview', requireRoles('admin', 'dev'), async (r
     throw new ApiError(400, 'ข้อมูลที่ส่งมาไม่ถูกต้อง', parsed.error.flatten());
   }
 
-  const plan = await analyzeImport(parsed.data.dataset, parsed.data.csv);
+  const plan = await analyzeImport(parsed.data.dataset, parsed.data.csv, req.admin.username);
+
+  // ไม่ส่งรหัสผ่านที่ผู้ใช้กรอกมากลับไปแสดงบนหน้าจอ แสดงเป็นสถานะแทน
+  if (plan.dataset === 'users') {
+    plan.rows = plan.rows.map((row) => ({
+      ...row,
+      values: {
+        ...row.values,
+        password: row.values.password ? 'ตั้งรหัสผ่านใหม่' : '',
+      },
+    }));
+  }
+
   res.json({ data: plan });
 });
 
@@ -2476,7 +2662,7 @@ router.post('/governance/import/commit', requireRoles('admin', 'dev'), async (re
   }
 
   const datasetName = parsed.data.dataset;
-  const plan = await analyzeImport(datasetName, parsed.data.csv);
+  const plan = await analyzeImport(datasetName, parsed.data.csv, req.admin.username);
 
   // ถ้ามีแถวผิดพลาดจะไม่นำเข้าเลยแม้แต่แถวเดียว
   // เพื่อไม่ให้ได้ข้อมูลเข้าไปครึ่งๆ กลางๆ แล้วตามแก้ยาก
@@ -2486,6 +2672,10 @@ router.post('/governance/import/commit', requireRoles('admin', 'dev'), async (re
       `ไฟล์มีข้อผิดพลาด ${plan.summary.error} แถว จึงยังไม่นำเข้าข้อมูลใดเลย กรุณาแก้ไฟล์แล้วลองใหม่`,
     );
   }
+
+  // รหัสผ่านที่ระบบสร้างให้บัญชีใหม่ ส่งกลับให้ผู้ดูแลครั้งเดียวเท่านั้น
+  // ไม่ได้บันทึกไว้ที่ใด และไม่ได้เขียนลง audit log
+  const generatedPasswords = [];
 
   const client = await pool.connect();
   try {
@@ -2519,6 +2709,54 @@ router.post('/governance/import/commit', requireRoles('admin', 'dev'), async (re
              updated_at = current_timestamp`,
           [v.code, v.name_th, v.sla_hours, v.is_active, v.sort_order, v.department_code],
         );
+      } else if (datasetName === 'users') {
+        const isNew = row.action === 'insert';
+        // บัญชีใหม่ที่ไม่ได้ระบุรหัสผ่านมา ระบบตั้งให้ชั่วคราวแล้วแสดงครั้งเดียว
+        const plainPassword = v.password || (isNew ? generateTemporaryPassword() : null);
+        const passwordHash = plainPassword ? await bcrypt.hash(plainPassword, 12) : null;
+
+        if (isNew) {
+          await client.query(
+            `INSERT INTO staff_users (username, password_hash, display_name, role, department_id, is_active)
+             SELECT $1, $2, $3, $4, d.id, $6
+               FROM (SELECT 1) AS anchor
+               LEFT JOIN departments d ON d.code = $5`,
+            [v.username, passwordHash, v.display_name, v.role, v.department_code, v.is_active],
+          );
+        } else {
+          await client.query(
+            `UPDATE staff_users AS su
+                SET display_name = $2,
+                    role = $3,
+                    department_id = target.department_id,
+                    is_active = $5,
+                    password_hash = COALESCE($6, su.password_hash),
+                    updated_at = current_timestamp
+               FROM (SELECT d.id AS department_id FROM (SELECT 1) AS anchor
+                      LEFT JOIN departments d ON d.code = $4) AS target
+              WHERE lower(su.username) = lower($1)`,
+            [v.username, v.display_name, v.role, v.department_code, v.is_active, passwordHash],
+          );
+        }
+
+        // เปลี่ยนรหัสผ่านหรือปิดบัญชีแล้วต้องเตะเซสชันเดิมออกทันที
+        // ไม่เช่นนั้น token ที่ออกไปก่อนหน้าจะยังใช้งานได้จนกว่าจะหมดอายุ
+        if (!isNew && (passwordHash || v.is_active === false)) {
+          await client.query(
+            `UPDATE staff_sessions s
+                SET revoked_at = current_timestamp,
+                    revoked_reason = $2
+               FROM staff_users u
+              WHERE u.id = s.staff_user_id
+                AND lower(u.username) = lower($1)
+                AND s.revoked_at IS NULL`,
+            [v.username, v.is_active === false ? 'account_disabled' : 'manual'],
+          );
+        }
+
+        if (isNew && !v.password) {
+          generatedPasswords.push({ username: v.username, password: plainPassword });
+        }
       } else {
         // ตัวระบุตัวตนคือ ชื่อ-สกุล + หน่วยงาน เพราะตารางนี้ไม่มีรหัสประจำตัว
         const updated = await client.query(
@@ -2576,6 +2814,7 @@ router.post('/governance/import/commit', requireRoles('admin', 'dev'), async (re
       label: plan.label,
       inserted: plan.summary.insert,
       updated: plan.summary.update,
+      ...(generatedPasswords.length ? { generatedPasswords } : {}),
     },
   });
 });
