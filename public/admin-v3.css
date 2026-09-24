@@ -2715,3 +2715,13 @@ a.map-link-button:visited{
   -webkit-user-select: all;
   user-select: all;
 }
+
+/* ===== ป้ายบอกชุดข้อมูลที่ตรวจพบจากไฟล์ (20260924-user-transfer-2) ===== */
+.transfer-detected {
+  margin: 0 0 2px;
+  color: #6b6480;
+  font-size: 0.82rem;
+}
+.transfer-detected b {
+  color: #5b3fa8;
+}
