@@ -111,27 +111,59 @@ router.post('/login', async (req, res) => {
     throw new ApiError(401, 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง');
   }
 
-  // ระบบอนุญาตให้ใช้งานได้ครั้งละหนึ่งเครื่องต่อหนึ่งบัญชี
-  // การเข้าสู่ระบบครั้งใหม่จะยกเลิกเซสชันเดิมทั้งหมดของบัญชีนี้
-  // ทำในทรานแซกชันเดียวกับการสร้างเซสชันใหม่ เพื่อไม่ให้เกิดช่วงที่ไม่มีเซสชันใดเลย
+  // ระบบอนุญาตให้ใช้งานได้ครั้งละหนึ่งเครื่องต่อหนึ่งบัญชี แบบผู้มาก่อนได้สิทธิ์
+  // ถ้ามีเซสชันที่ยังใช้งานอยู่จริง จะปฏิเสธการเข้าสู่ระบบทันที
+  //
+  // "ยังใช้งานอยู่จริง" หมายถึงยังไม่ถูกยกเลิก ยังไม่หมดอายุ และมีความเคลื่อนไหว
+  // ภายในเวลาที่กำหนด เซสชันที่เงียบเกินกำหนดถือว่าสิ้นสุดแล้ว จึงไม่กันคนอื่นเข้า
   const client = await pool.connect();
   let sessionId;
-  let supersededCount = 0;
 
   try {
     await client.query('BEGIN');
 
-    const superseded = await client.query(
-      `UPDATE staff_sessions
-          SET revoked_at = current_timestamp,
-              revoked_reason = 'superseded'
+    // ล็อกแถวเซสชันของบัญชีนี้ไว้ก่อน กันสองเครื่องกดเข้าสู่ระบบพร้อมกัน
+    // แล้วต่างฝ่ายต่างเห็นว่าไม่มีเซสชันอยู่ จนสร้างเซสชันซ้อนกันสองอัน
+    const activeResult = await client.query(
+      `SELECT id,
+              last_seen_at > current_timestamp - make_interval(mins => $2)
+              AND (
+                closing_at IS NULL
+                OR closing_at > current_timestamp - make_interval(secs => $3)
+              ) AS is_live
+         FROM staff_sessions
         WHERE staff_user_id = $1
           AND revoked_at IS NULL
           AND expires_at > current_timestamp
-      RETURNING id`,
-      [user.id],
+          FOR UPDATE`,
+      [user.id, config.sessionIdleMinutes, config.sessionClosingGraceSeconds],
     );
-    supersededCount = superseded.rowCount;
+
+    if (activeResult.rows.some((row) => row.is_live)) {
+      await client.query('ROLLBACK');
+      const error = new ApiError(
+        409,
+        'บัญชีนี้กำลังถูกใช้งานอยู่ที่อุปกรณ์อื่น ระบบอนุญาตให้เข้าใช้งานได้ครั้งละหนึ่งเครื่องเท่านั้น',
+      );
+      error.sessionReason = 'already_active';
+      throw error;
+    }
+
+    // เซสชันที่เงียบเกินกำหนดถือว่าสิ้นสุดแล้ว ปิดให้เรียบร้อยก่อนเปิดอันใหม่
+    // จะได้ไม่มีแถวค้างสะสมและเห็นสาเหตุชัดเจนตอนตรวจย้อนหลัง
+    if (activeResult.rowCount) {
+      await client.query(
+        `UPDATE staff_sessions
+            SET revoked_at = current_timestamp,
+                revoked_reason = CASE
+                  WHEN closing_at IS NOT NULL THEN 'browser_closed'
+                  ELSE 'idle_timeout'
+                END
+          WHERE staff_user_id = $1
+            AND revoked_at IS NULL`,
+        [user.id],
+      );
+    }
 
     const created = await client.query(
       `INSERT INTO staff_sessions (staff_user_id, expires_at, ip_address, user_agent)
@@ -153,7 +185,13 @@ router.post('/login', async (req, res) => {
 
     await client.query('COMMIT');
   } catch (error) {
-    await client.query('ROLLBACK');
+    // กรณีปฏิเสธการเข้าสู่ระบบซ้อน เรา rollback ไปแล้ว การสั่งซ้ำจะไม่มีผลใดๆ
+    // แต่ห่อ try ไว้เพื่อไม่ให้ข้อผิดพลาดตัวจริงถูกกลบด้วยข้อผิดพลาดของ rollback
+    try {
+      await client.query('ROLLBACK');
+    } catch {
+      // ไม่มีทรานแซกชันค้างอยู่แล้ว
+    }
     throw error;
   } finally {
     client.release();
@@ -179,16 +217,12 @@ router.post('/login', async (req, res) => {
   // writeAudit อ่านผู้กระทำจาก req.admin ซึ่งเส้นทางนี้ยังไม่ผ่าน middleware
   // จึงตั้งค่าให้ก่อน (จะ spread req ไม่ได้ เพราะ req.ip และ req.get เป็นเมท็อดของ prototype)
   req.admin = { id: user.id };
-  await writeAudit(req, 'auth.login', 'staff_user', user.id, {
-    superseded_sessions: supersededCount,
-  });
+  await writeAudit(req, 'auth.login', 'staff_user', user.id, {});
 
   res.json({
     success: true,
     data: {
       token,
-      // บอกหน้าเว็บว่าการเข้าสู่ระบบครั้งนี้ทำให้เครื่องอื่นหลุดออกไปกี่เครื่อง
-      supersededSessions: supersededCount,
       user: {
         id: user.id,
         username: user.username,
@@ -200,10 +234,67 @@ router.post('/login', async (req, res) => {
   });
 });
 
+// รับสัญญาณว่าเบราว์เซอร์กำลังปิด ส่งมาด้วย navigator.sendBeacon
+//
+// ต้องวางไว้ก่อน requireAdmin เพราะ sendBeacon ตั้งส่วนหัวของคำขอเองไม่ได้
+// จึงแนบ token มาในเนื้อคำขอแทน แล้วตรวจลายเซ็นเองที่นี่
+//
+// ไม่ยกเลิกเซสชันทันที เพราะเหตุการณ์ pagehide เกิดตอนกดรีเฟรชด้วย
+// เพียงทำเครื่องหมายเวลาไว้ แล้วให้คำขอถัดไปของเซสชันเดียวกันมาล้างทิ้ง
+router.post('/session/closing', async (req, res) => {
+  const parsed = z.object({ token: z.string().min(1).max(4000) }).safeParse(req.body);
+  if (!parsed.success) {
+    // ไม่บอกรายละเอียด และตอบสำเร็จเสมอ เพราะฝั่งเบราว์เซอร์กำลังจะปิดอยู่แล้ว
+    // ไม่มีใครรอรับคำตอบ และไม่ควรเปิดช่องให้ทดสอบ token จากภายนอก
+    return res.json({ success: true });
+  }
+
+  try {
+    const payload = jwt.verify(parsed.data.token, config.jwtSecret, {
+      issuer: 'lineoa-complaint-gdcc',
+      audience: 'complaint-admin',
+    });
+
+    if (payload.jti) {
+      await pool.query(
+        `UPDATE staff_sessions
+            SET closing_at = current_timestamp
+          WHERE id = $1
+            AND revoked_at IS NULL`,
+        [payload.jti],
+      );
+    }
+  } catch {
+    // token ไม่ถูกต้องหรือหมดอายุ ไม่ต้องทำอะไร
+  }
+
+  return res.json({ success: true });
+});
+
 router.use(requireAdmin);
 
 router.get('/me', (req, res) => {
   res.json({ success: true, data: req.admin });
+});
+
+// ออกจากระบบ — ยกเลิกเซสชันปัจจุบันที่ฝั่งเซิร์ฟเวอร์จริง
+//
+// จำเป็นอย่างยิ่งเมื่อใช้นโยบาย "หนึ่งบัญชีหนึ่งเครื่อง แบบผู้มาก่อนได้สิทธิ์"
+// เพราะถ้าการกดออกจากระบบเป็นแค่การลบ token ทิ้งจากเบราว์เซอร์
+// เซสชันเดิมจะยังนับว่าใช้งานอยู่ แล้วเจ้าตัวจะเข้าสู่ระบบใหม่ไม่ได้ทันที
+router.post('/logout', async (req, res) => {
+  await pool.query(
+    `UPDATE staff_sessions
+        SET revoked_at = current_timestamp,
+            revoked_reason = 'signed_out'
+      WHERE id = $1
+        AND revoked_at IS NULL`,
+    [req.admin.sessionId],
+  );
+
+  await writeAudit(req, 'auth.logout', 'staff_user', req.admin.id, {});
+
+  res.json({ success: true, message: 'ออกจากระบบเรียบร้อย' });
 });
 
 router.get('/attachments/:id', async (req, res) => {
@@ -2304,11 +2395,47 @@ const TRANSFER_DATASETS = {
                        su.last_login_at
                   FROM staff_users su
                   LEFT JOIN departments d ON d.id = su.department_id
+                 WHERE su.role <> 'dev'
                  ORDER BY su.role, su.username`,
   },
 };
 
 const IMPORTABLE_USER_ROLES = ['officer', 'supervisor', 'executive', 'admin'];
+
+// ตรวจจับว่าไฟล์ที่อัปโหลดมาเป็นข้อมูลชุดใด จากชื่อคอลัมน์ในแถวหัวตาราง
+// เรียงจากชุดที่มีลักษณะเฉพาะชัดเจนที่สุดไปหาน้อยที่สุด ชุดแรกที่เข้าเงื่อนไขคือคำตอบ
+// หน่วยงานกับหมวดหมู่ใช้คอลัมน์ code และ name_th เหมือนกัน จึงแยกด้วย sla_hours
+// หรือ sort_order ซึ่งมีเฉพาะในหมวดหมู่ และบังคับว่าชุดหน่วยงานต้องไม่มีคอลัมน์เหล่านั้น
+const DATASET_SIGNATURES = [
+  { dataset: 'users', required: ['username', 'display_name', 'role'] },
+  { dataset: 'staffProfiles', required: ['full_name', 'position_title'] },
+  {
+    dataset: 'categories',
+    required: ['code', 'name_th'],
+    anyOf: ['sla_hours', 'sort_order'],
+  },
+  {
+    dataset: 'departments',
+    required: ['code', 'name_th'],
+    forbidden: ['sla_hours', 'sort_order', 'department_code'],
+  },
+];
+
+function detectDataset(headerRow) {
+  const headers = new Set(headerRow);
+
+  for (const signature of DATASET_SIGNATURES) {
+    if (!signature.required.every((name) => headers.has(name))) continue;
+    if (signature.anyOf && !signature.anyOf.some((name) => headers.has(name))) continue;
+    if (signature.forbidden?.some((name) => headers.has(name))) continue;
+    return signature.dataset;
+  }
+
+  throw new ApiError(
+    400,
+    'ไม่สามารถระบุได้ว่าไฟล์นี้เป็นข้อมูลชุดใด กรุณากดส่งออกไฟล์ตัวอย่างของชุดที่ต้องการก่อน แล้วแก้ไขในไฟล์นั้น เพื่อให้หัวตารางตรงกับที่ระบบรู้จัก',
+  );
+}
 
 // สร้างรหัสผ่านชั่วคราวให้บัญชีใหม่ที่ไม่ได้ระบุรหัสผ่านมาในไฟล์
 // ใช้ตัวอักษรที่อ่านแล้วไม่สับสน ตัด O 0 I l 1 ออก เพราะต้องอ่านให้เจ้าหน้าที่ฟัง
@@ -2353,8 +2480,7 @@ function parseInteger(value, fallback) {
 // วิเคราะห์ไฟล์ที่อัปโหลด เทียบกับข้อมูลที่มีอยู่ แล้วบอกว่าแต่ละแถวจะเกิดอะไรขึ้น
 // ไม่แตะฐานข้อมูล ใช้ได้ทั้งตอนดูตัวอย่างและตอนยืนยัน
 // ---------------------------------------------------------------------------
-async function analyzeImport(datasetName, csvText, currentUsername = null) {
-  const dataset = getDataset(datasetName);
+async function analyzeImport(csvText, currentUsername = null) {
   const table = parseCsv(csvText);
 
   if (!table.length) {
@@ -2362,18 +2488,14 @@ async function analyzeImport(datasetName, csvText, currentUsername = null) {
   }
 
   const headerRow = table[0].map((cell) => unwrapExcelText(cell).trim().toLowerCase());
-  const optionalHeaders = [
-    'is_active', 'sort_order', 'sla_hours', 'department_code',
-    'line_id', 'phone', 'password', 'last_login_at',
-  ];
-  const missingHeaders = dataset.headers.filter(
-    (name) => !optionalHeaders.includes(name) && !headerRow.includes(name),
-  );
-  if (missingHeaders.length) {
-    throw new ApiError(
-      400,
-      `หัวตารางไม่ครบ ขาดคอลัมน์: ${missingHeaders.join(', ')} — แนะนำให้กดส่งออกไฟล์ตัวอย่างก่อน แล้วแก้ในไฟล์นั้น`,
-    );
+
+  // ผู้ใช้ไม่ต้องเลือกชุดข้อมูลเอง ระบบดูจากหัวตารางว่าไฟล์นี้เป็นข้อมูลชุดใด
+  // จึงไม่มีทางเลือกชุดผิดแล้วนำเข้าลงตารางที่ไม่ได้ตั้งใจอีกต่อไป
+  const datasetName = detectDataset(headerRow);
+  const dataset = getDataset(datasetName);
+
+  if (!dataset.importable) {
+    throw new ApiError(400, `${dataset.label} ส่งออกได้อย่างเดียว นำกลับเข้ามาไม่ได้`);
   }
 
   const columnIndex = Object.fromEntries(
@@ -2627,13 +2749,13 @@ router.get('/governance/export.csv', requireRoles('admin', 'dev'), async (req, r
 // ---------------------------------------------------------------------------
 router.post('/governance/import/preview', requireRoles('admin', 'dev'), async (req, res) => {
   const parsed = z
-    .object({ dataset: z.string(), csv: z.string().min(1).max(400_000) })
+    .object({ csv: z.string().min(1).max(400_000) })
     .safeParse(req.body);
   if (!parsed.success) {
     throw new ApiError(400, 'ข้อมูลที่ส่งมาไม่ถูกต้อง', parsed.error.flatten());
   }
 
-  const plan = await analyzeImport(parsed.data.dataset, parsed.data.csv, req.admin.username);
+  const plan = await analyzeImport(parsed.data.csv, req.admin.username);
 
   // ไม่ส่งรหัสผ่านที่ผู้ใช้กรอกมากลับไปแสดงบนหน้าจอ แสดงเป็นสถานะแทน
   if (plan.dataset === 'users') {
@@ -2655,14 +2777,26 @@ router.post('/governance/import/preview', requireRoles('admin', 'dev'), async (r
 // ---------------------------------------------------------------------------
 router.post('/governance/import/commit', requireRoles('admin', 'dev'), async (req, res) => {
   const parsed = z
-    .object({ dataset: z.string(), csv: z.string().min(1).max(400_000) })
+    .object({
+      csv: z.string().min(1).max(400_000),
+      // ชุดข้อมูลที่หน้าเว็บเห็นตอนกดตรวจสอบ ใช้เทียบเท่านั้น ไม่ได้ใช้ตัดสิน
+      expectedDataset: z.string().optional(),
+    })
     .safeParse(req.body);
   if (!parsed.success) {
     throw new ApiError(400, 'ข้อมูลที่ส่งมาไม่ถูกต้อง', parsed.error.flatten());
   }
 
-  const datasetName = parsed.data.dataset;
-  const plan = await analyzeImport(datasetName, parsed.data.csv, req.admin.username);
+  const plan = await analyzeImport(parsed.data.csv, req.admin.username);
+  const datasetName = plan.dataset;
+
+  // กันกรณีไฟล์ถูกสลับระหว่างขั้นตรวจสอบกับขั้นยืนยัน จนกลายเป็นข้อมูลคนละชุด
+  if (parsed.data.expectedDataset && parsed.data.expectedDataset !== datasetName) {
+    throw new ApiError(
+      409,
+      `ไฟล์ที่ยืนยันเป็นข้อมูลชุด "${plan.label}" ซึ่งไม่ตรงกับที่แสดงตอนตรวจสอบ กรุณาตรวจสอบไฟล์ใหม่อีกครั้ง`,
+    );
+  }
 
   // ถ้ามีแถวผิดพลาดจะไม่นำเข้าเลยแม้แต่แถวเดียว
   // เพื่อไม่ให้ได้ข้อมูลเข้าไปครึ่งๆ กลางๆ แล้วตามแก้ยาก

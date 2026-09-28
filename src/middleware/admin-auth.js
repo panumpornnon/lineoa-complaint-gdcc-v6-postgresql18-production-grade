@@ -3,13 +3,13 @@ import config from '../config.js';
 import { pool } from '../db.js';
 import { ApiError } from '../errors.js';
 
-// อัปเดตเวลาใช้งานล่าสุดไม่ถี่กว่านี้ เพื่อไม่ให้ทุกคำขอกลายเป็นการเขียนฐานข้อมูล
-const LAST_SEEN_REFRESH_MS = 60_000;
-
 // อธิบายให้ผู้ใช้เข้าใจว่าทำไมถึงหลุดออกจากระบบ แทนข้อความกลางๆ ว่าเซสชันหมดอายุ
 // ฝั่งหน้าเว็บใช้ค่า reason นี้ตัดสินว่าจะแสดงข้อความใดที่หน้าเข้าสู่ระบบ
 const REVOKED_MESSAGES = {
   superseded: 'บัญชีนี้ถูกเข้าสู่ระบบจากอุปกรณ์อื่น ระบบอนุญาตให้ใช้งานได้ครั้งละหนึ่งเครื่องเท่านั้น',
+  signed_out: 'บัญชีนี้ได้ออกจากระบบแล้ว กรุณาเข้าสู่ระบบใหม่',
+  idle_timeout: 'ไม่มีการใช้งานเกินเวลาที่กำหนด ระบบออกจากระบบให้อัตโนมัติ กรุณาเข้าสู่ระบบใหม่',
+  browser_closed: 'เบราว์เซอร์ถูกปิด ระบบจึงออกจากระบบให้อัตโนมัติ กรุณาเข้าสู่ระบบใหม่',
   account_disabled: 'บัญชีนี้ถูกปิดใช้งาน กรุณาติดต่อผู้ดูแลระบบ',
   manual: 'ผู้ดูแลระบบสั่งให้บัญชีนี้ออกจากระบบ',
 };
@@ -27,11 +27,12 @@ async function explainInvalidSession(sessionId) {
     `SELECT s.revoked_reason,
             s.revoked_at,
             s.expires_at <= current_timestamp AS is_expired,
+            s.last_seen_at <= current_timestamp - make_interval(mins => $2) AS is_idle,
             u.is_active
        FROM staff_sessions s
        JOIN staff_users u ON u.id = s.staff_user_id
       WHERE s.id = $1`,
-    [sessionId],
+    [sessionId, config.sessionIdleMinutes],
   );
 
   const row = result.rows[0];
@@ -50,6 +51,9 @@ async function explainInvalidSession(sessionId) {
   }
   if (row.is_expired) {
     return sessionError('expired', 'เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่');
+  }
+  if (row.is_idle) {
+    return sessionError('idle_timeout', REVOKED_MESSAGES.idle_timeout);
   }
   return sessionError('unknown', 'เซสชันไม่ถูกต้อง กรุณาเข้าสู่ระบบใหม่');
 }
@@ -92,14 +96,22 @@ export async function requireAdmin(req, res, next) {
               u.display_name,
               u.role,
               u.department_id,
-              s.last_seen_at < current_timestamp - interval '1 minute' AS last_seen_stale
+              -- อัปเดตเวลาใช้งานล่าสุดไม่ถี่กว่าหนึ่งนาที เพื่อไม่ให้ทุกคำขอ
+              -- กลายเป็นการเขียนฐานข้อมูล ความคลาดเคลื่อนไม่เกินหนึ่งนาที
+              -- ซึ่งเล็กมากเมื่อเทียบกับเกณฑ์ไม่ใช้งานที่ตั้งไว้เป็นชั่วโมง
+              s.last_seen_at < current_timestamp - interval '1 minute' AS last_seen_stale,
+              -- มีคำขอเข้ามาทั้งที่เคยแจ้งว่ากำลังปิด แปลว่าเป็นการรีเฟรชหน้าจอ
+              -- ไม่ใช่การปิดจริง ต้องล้างเครื่องหมายทิ้ง มิฉะนั้นบัญชีจะถูกปล่อย
+              -- ให้เครื่องอื่นเข้าใช้งานแทนทั้งที่เจ้าตัวยังทำงานอยู่
+              s.closing_at IS NOT NULL AS was_closing
          FROM staff_sessions s
          JOIN staff_users u ON u.id = s.staff_user_id
         WHERE s.id = $1
           AND s.revoked_at IS NULL
           AND s.expires_at > current_timestamp
+          AND s.last_seen_at > current_timestamp - make_interval(mins => $2)
           AND u.is_active`,
-      [sessionId],
+      [sessionId, config.sessionIdleMinutes],
     );
 
     if (!result.rowCount) {
@@ -117,7 +129,15 @@ export async function requireAdmin(req, res, next) {
       sessionId,
     };
 
-    if (user.last_seen_stale) {
+    if (user.was_closing) {
+      await pool.query(
+        `UPDATE staff_sessions
+            SET closing_at = NULL,
+                last_seen_at = current_timestamp
+          WHERE id = $1`,
+        [sessionId],
+      );
+    } else if (user.last_seen_stale) {
       await pool.query(
         `UPDATE staff_sessions
             SET last_seen_at = current_timestamp
