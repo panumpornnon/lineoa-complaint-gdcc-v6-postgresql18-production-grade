@@ -48,6 +48,11 @@ let smartGeoMarkers = null;
 let smartGeoMarkerById = new Map();
 let smartGeoResizeTimer = null;
 let selectedMapMonth = "all";
+// ตัวกรองหน่วยงานและรายการที่ติ๊กเลือกไว้ในแท็บผู้ใช้งาน
+let userDepartmentFilterId = "";
+let selectedUserIds = new Set();
+// id -> { name, email } ของแถวที่เลือกได้ในตารางปัจจุบัน ใช้แสดงรายชื่อในหน้ายืนยันการส่งอีเมล
+let selectableUserDirectory = new Map();
 let mobileMapPage = 1;
 const mobileMapPageSize = 4;
 const reportInsightPages = { topCategory: 1, category: 1, department: 1 };
@@ -1334,6 +1339,27 @@ function parseAuditDetail(detail) {
     return { value: detail };
   }
 }
+// คำอธิบายภาษาไทยของรหัสกิจกรรมที่อ่านยาก โดยเฉพาะกลุ่มลืมรหัสผ่าน
+// ที่หัวหน้าและผู้บริหารต้องอ่านออกทันทีว่าเกิดอะไรขึ้นกับบัญชีใด
+const auditActionLabels = {
+  "auth.password_reset_requested": "ขอรหัสยืนยัน (ลืมรหัสผ่าน)",
+  "auth.password_reset_requested_unknown": "ขอรหัสยืนยันด้วยอีเมลที่ไม่มีในระบบ",
+  "auth.password_reset_code_failed": "กรอกรหัสยืนยันผิด",
+  "auth.password_reset_code_verified": "ยืนยันรหัสสำเร็จ",
+  "auth.password_reset": "ตั้งรหัสผ่านใหม่สำเร็จ",
+  "staff.send_reset_code": "ผู้ดูแลส่งรหัสยืนยันทางอีเมล",
+};
+
+function auditActionHtml(action) {
+  const label = auditActionLabels[action];
+  // บรรทัดบนคือคำอธิบายภาษาไทย บรรทัดล่างคือรหัสกิจกรรมของระบบ
+  // (เช่น auth.password_reset_requested) ไม่ใช่รหัสผ่านหรือรหัสยืนยันของผู้ใช้
+  // มีไว้ให้ผู้ดูแลอ้างอิงตอนไล่ปัญหาหรือค้นในฐานข้อมูล
+  return label
+    ? `<div class="audit-action-label">${escapeHtml(label)}</div><div class="audit-action-code">${escapeHtml(action)}</div>`
+    : escapeHtml(action);
+}
+
 function auditNoteHtml(detail) {
   const value = parseAuditDetail(detail);
   const deletionReason = String(value.deletionReason || "").trim();
@@ -1451,10 +1477,30 @@ async function loadGovernance(mode = "categories") {
           "เฉพาะผู้ดูแลระบบและผู้พัฒนาระบบเท่านั้นที่ดูข้อมูลผู้ใช้งานได้",
         );
       }
-      const r = await api("/api/admin/governance/users");
+      setupUserDepartmentFilter();
+      const userParams = new URLSearchParams();
+      if (userDepartmentFilterId)
+        userParams.set("departmentId", userDepartmentFilterId);
+      const r = await api(
+        `/api/admin/governance/users${userParams.size ? `?${userParams}` : ""}`,
+      );
+
+      // เก็บเฉพาะรายการที่ยังอยู่ในผลลัพธ์ กันไม่ให้ค้างการเลือกของคนที่ถูกกรองออกไป
+      const visibleIds = new Set(r.data.map((x) => x.id));
+      selectedUserIds = new Set(
+        [...selectedUserIds].filter((id) => visibleIds.has(id)),
+      );
+      selectableUserDirectory = new Map(
+        r.data
+          .filter((x) => x.role !== "dev" && x.email)
+          .map((x) => [x.id, { name: x.display_name, email: x.email }]),
+      );
+
       const headers = [
+        '<label class="select-all-head"><input type="checkbox" id="userSelectAll" aria-label="เลือกทั้งหมด" /><span>ทั้งหมด</span></label>',
         "ชื่อผู้ใช้",
         "ชื่อแสดงผล",
+        "อีเมล",
         "สิทธิ์",
         "หน่วยงาน",
         "เข้าสู่ระบบล่าสุด",
@@ -1466,9 +1512,28 @@ async function loadGovernance(mode = "categories") {
         r.data.map((x) => {
           const protectedDev = x.role === "dev";
           const editDisabled = protectedDev && currentUser.role !== "dev";
-          return `<tr><td class="case-ref">${escapeHtml(x.username)}</td><td>${escapeHtml(x.display_name)}</td><td>${escapeHtml(roleLabel(x.role))}</td><td>${escapeHtml(x.department_name || (["admin", "dev", "executive", "exclusive"].includes(x.role) ? "ทุกหน่วยงาน" : "ยังไม่ได้กำหนด"))}</td><td>${fmt(x.last_login_at)}</td><td>${x.is_active ? '<span class="v3-badge status-completed">ใช้งาน</span>' : '<span class="v3-badge status-cancelled">ระงับ</span>'}</td><td><div class="governance-actions"><button class="governance-edit edit-user" data-json='${escapeHtml(JSON.stringify(x))}' ${editDisabled ? 'disabled title="Admin ไม่สามารถแก้ไขบัญชี DEV ได้"' : ""}>แก้ไข</button><button class="governance-delete delete-user" data-json='${escapeHtml(JSON.stringify(x))}' ${x.id === currentUser.id || protectedDev ? 'disabled title="ไม่สามารถลบบัญชี DEV หรือบัญชีที่กำลังใช้งาน"' : ""}>ลบ</button></div></td></tr>`;
+          // บัญชี DEV และบัญชีที่ไม่มีอีเมล ส่งรหัสยืนยันให้ไม่ได้ จึงไม่ให้ติ๊ก
+          const selectable = !protectedDev && Boolean(x.email);
+          const checkbox = selectable
+            ? `<input type="checkbox" class="user-select" data-user-id="${escapeHtml(x.id)}" ${selectedUserIds.has(x.id) ? "checked" : ""} aria-label="เลือก ${escapeHtml(x.display_name)}" />`
+            : `<input type="checkbox" disabled title="${protectedDev ? "บัญชี DEV ตั้งรหัสผ่านใหม่ผ่านหน้าจอไม่ได้" : "บัญชีนี้ยังไม่ได้บันทึกอีเมล"}" />`;
+          return `<tr><td>${checkbox}</td><td class="case-ref">${escapeHtml(x.username)}</td><td>${escapeHtml(x.display_name)}</td><td>${x.email ? escapeHtml(x.email) : '<span class="muted">ยังไม่ได้บันทึก</span>'}</td><td>${escapeHtml(roleLabel(x.role))}</td><td>${escapeHtml(x.department_name || (["admin", "dev", "executive", "exclusive"].includes(x.role) ? "ทุกหน่วยงาน" : "ยังไม่ได้กำหนด"))}</td><td>${fmt(x.last_login_at)}</td><td>${x.is_active ? '<span class="v3-badge status-completed">ใช้งาน</span>' : '<span class="v3-badge status-cancelled">ระงับ</span>'}</td><td><div class="governance-actions"><button class="governance-edit edit-user" data-json='${escapeHtml(JSON.stringify(x))}' ${editDisabled ? 'disabled title="Admin ไม่สามารถแก้ไขบัญชี DEV ได้"' : ""}>แก้ไข</button><button class="governance-delete delete-user" data-json='${escapeHtml(JSON.stringify(x))}' ${x.id === currentUser.id || protectedDev ? 'disabled title="ไม่สามารถลบบัญชี DEV หรือบัญชีที่กำลังใช้งาน"' : ""}>ลบ</button></div></td></tr>`;
         }),
       );
+
+      document.querySelectorAll(".user-select").forEach((box) => {
+        box.onchange = () => {
+          if (box.checked) selectedUserIds.add(box.dataset.userId);
+          else selectedUserIds.delete(box.dataset.userId);
+          renderUserSelectionBar();
+        };
+      });
+      const selectAll = $("#userSelectAll");
+      if (selectAll) {
+        selectAll.onchange = () => setAllUsersSelected(selectAll.checked);
+      }
+      renderUserSelectionBar();
+
       document
         .querySelectorAll(".edit-user:not(:disabled)")
         .forEach(
@@ -1538,7 +1603,7 @@ async function loadGovernance(mode = "categories") {
         ],
         r.data.map(
           (x) =>
-            `<tr><td>${fmt(x.created_at)}</td><td>${escapeHtml(x.actor_name || "ระบบ")}</td><td class="case-ref">${escapeHtml(x.action)}</td><td>${escapeHtml(x.entity_type)}</td><td>${auditNoteHtml(x.detail)}</td><td>${auditDetailHtml(x.detail)}</td></tr>`,
+            `<tr><td>${fmt(x.created_at)}</td><td>${escapeHtml(x.actor_name || "ระบบ")}</td><td class="case-ref">${auditActionHtml(x.action)}</td><td>${escapeHtml(x.entity_type)}</td><td>${auditNoteHtml(x.detail)}</td><td>${auditDetailHtml(x.detail)}</td></tr>`,
         ),
       );
     }
@@ -1678,6 +1743,13 @@ function openGovernanceDialog(type, data = null) {
       `<label>สิทธิ์<select name="role" id="governanceUserRole"><option value="officer" ${data?.role === "officer" ? "selected" : ""}>Officer</option><option value="supervisor" ${data?.role === "supervisor" ? "selected" : ""}>Supervisor</option><option value="executive" ${["executive", "exclusive"].includes(data?.role) ? "selected" : ""}>Executive</option><option value="admin" ${data?.role === "admin" ? "selected" : ""}>Admin</option>${devOption}</select></label>` +
       userDepartmentField(data) +
       dialogField(
+        "อีเมล (สำหรับส่งรหัสยืนยันเมื่อลืมรหัสผ่าน)",
+        "email",
+        "email",
+        data?.email || "",
+        'maxlength="254" autocomplete="off" required',
+      ) +
+      dialogField(
         data
           ? "รหัสผ่านใหม่ (เว้นว่างหากไม่เปลี่ยน)"
           : "รหัสผ่านอย่างน้อย 12 ตัว",
@@ -1795,9 +1867,15 @@ async function saveGovernance() {
       ? `/api/admin/governance/users/${data.id}`
       : "/api/admin/governance/users";
     if (data) method = "PATCH";
+    // อีเมลบังคับกรอก และต้องส่งไปกับ payload เสมอ
+    // เดิมช่องนี้มีอยู่ในฟอร์มแต่ไม่ได้ถูกใส่ลง payload ค่าจึงหายระหว่างทาง
+    // ทำให้เซิร์ฟเวอร์ตอบว่าข้อมูลไม่ถูกต้องทุกครั้งที่กดบันทึก
+    const email = (v.email || "").trim();
+    if (!email) throw new Error("กรุณากรอกอีเมลของผู้ใช้งาน");
     payload = {
       displayName: v.displayName,
       role: v.role,
+      email,
       departmentId: ["admin", "dev", "executive"].includes(v.role)
         ? null
         : v.departmentId,
@@ -2386,3 +2464,346 @@ async function confirmGovernanceImport() {
 $("#transferExportButton").onclick = () => exportGovernanceCsv();
 $("#transferPreviewButton").onclick = () => previewGovernanceImport();
 $("#transferDataset").onchange = () => resetTransferPanel();
+
+// ===========================================================================
+// ขั้นตอนตั้งรหัสผ่านใหม่จากหน้าเข้าสู่ระบบ
+//
+// สามขั้น: กรอกอีเมล → กรอกรหัสยืนยัน 8 หลัก → ตั้งรหัสผ่านใหม่สองช่อง
+// เกณฑ์รหัสผ่านตรวจทั้งที่นี่เพื่อบอกผู้ใช้ทันที และที่เซิร์ฟเวอร์อีกชั้น
+// ===========================================================================
+const PASSWORD_RULES = [
+  { label: "ยาวอย่างน้อย 12 ตัวอักษร", test: (v) => v.length >= 12 },
+  { label: "มีตัวอักษรพิมพ์ใหญ่ A-Z", test: (v) => /[A-Z]/.test(v) },
+  { label: "มีตัวอักษรพิมพ์เล็ก a-z", test: (v) => /[a-z]/.test(v) },
+  { label: "มีตัวเลข 0-9", test: (v) => /\d/.test(v) },
+  { label: "มีอักขระพิเศษ เช่น ! @ # $ %", test: (v) => /[^A-Za-z0-9]/.test(v) },
+];
+
+let resetEmailValue = "";
+let resetTicket = null;
+
+function renderPasswordRules(value) {
+  const list = $("#resetPasswordRules");
+  if (!list) return true;
+  let allPassed = true;
+  list.innerHTML = PASSWORD_RULES.map((rule) => {
+    const passed = rule.test(value);
+    if (!passed) allPassed = false;
+    return `<li class="${passed ? "is-ok" : "is-pending"}">${passed ? "✓" : "○"} ${escapeHtml(rule.label)}</li>`;
+  }).join("");
+  return allPassed;
+}
+
+function showResetStep(step) {
+  [1, 2, 3].forEach((n) => {
+    $(`#resetStep${n}`)?.classList.toggle("hidden", n !== step);
+    $(`#resetStepDot${n}`)?.classList.toggle("is-active", n === step);
+    $(`#resetStepDot${n}`)?.classList.toggle("is-done", n < step);
+  });
+
+  const subtitles = {
+    1: "กรอกอีเมลที่ลงทะเบียนไว้กับระบบ เพื่อรับลิงก์และรหัสยืนยัน 8 หลัก",
+    2: `กรอกรหัสยืนยัน 8 หลักที่ส่งไปยัง ${resetEmailValue || "อีเมลของท่าน"}`,
+    3: "ตั้งรหัสผ่านใหม่ กรอกให้ตรงกันทั้งสองช่อง",
+  };
+  const subtitle = $("#resetSubtitle");
+  if (subtitle) subtitle.textContent = subtitles[step];
+}
+
+function openResetView(prefillEmail = "") {
+  $("#loginPanel")?.classList.remove("hidden");
+  $("#appShell")?.classList.add("hidden");
+  $("#loginPanel")?.querySelector(".login-card")?.classList.add("hidden");
+  $("#resetCard")?.classList.remove("hidden");
+  clear("#resetAlert");
+  clear("#adminAlert");
+
+  resetTicket = null;
+  resetEmailValue = prefillEmail;
+  $("#resetEmail").value = prefillEmail;
+  $("#resetCode").value = "";
+  $("#resetPassword").value = "";
+  $("#resetPasswordConfirm").value = "";
+  renderPasswordRules("");
+  showResetStep(1);
+}
+
+function closeResetView() {
+  $("#resetCard")?.classList.add("hidden");
+  $("#loginPanel")?.querySelector(".login-card")?.classList.remove("hidden");
+  resetTicket = null;
+  clear("#resetAlert");
+}
+
+async function requestResetCode() {
+  const email = $("#resetEmail").value.trim();
+  if (!email) return;
+  clear("#resetAlert");
+  try {
+    const r = await api("/api/admin/auth/forgot-password", {
+      method: "POST",
+      body: JSON.stringify({ email }),
+    });
+    resetEmailValue = email;
+    showResetStep(2);
+    // ข้อความจากเซิร์ฟเวอร์เป็นข้อความกลางเสมอ ไม่บอกว่าอีเมลนี้มีอยู่จริงหรือไม่
+    // เพื่อไม่ให้หน้านี้ถูกใช้ไล่ตรวจว่าอีเมลใดเป็นของเจ้าหน้าที่
+    show("#resetAlert", r.message, "success");
+  } catch (e) {
+    show("#resetAlert", e.message);
+  }
+}
+
+$("#forgotPasswordLink").onclick = () => openResetView($("#username").value.trim());
+$("#resetBackToLogin").onclick = () => closeResetView();
+
+$("#resetStep1").onsubmit = async (e) => {
+  e.preventDefault();
+  await requestResetCode();
+};
+
+$("#resetResendButton").onclick = async () => {
+  await requestResetCode();
+};
+
+$("#resetStep2").onsubmit = async (e) => {
+  e.preventDefault();
+  clear("#resetAlert");
+  const code = $("#resetCode").value.trim();
+  try {
+    const r = await api("/api/admin/auth/verify-reset-code", {
+      method: "POST",
+      body: JSON.stringify({ email: resetEmailValue, code }),
+    });
+    resetTicket = r.data.ticket;
+    showResetStep(3);
+    renderPasswordRules("");
+    $("#resetPassword").focus();
+  } catch (e2) {
+    show("#resetAlert", e2.message);
+  }
+};
+
+$("#resetPassword").oninput = () => renderPasswordRules($("#resetPassword").value);
+
+$("#resetStep3").onsubmit = async (e) => {
+  e.preventDefault();
+  clear("#resetAlert");
+
+  const password = $("#resetPassword").value;
+  const confirmPassword = $("#resetPasswordConfirm").value;
+
+  if (!renderPasswordRules(password)) {
+    show("#resetAlert", "รหัสผ่านยังไม่ครบตามเกณฑ์ที่กำหนด");
+    return;
+  }
+  if (password !== confirmPassword) {
+    show("#resetAlert", "รหัสผ่านทั้งสองช่องไม่ตรงกัน");
+    return;
+  }
+
+  try {
+    const r = await api("/api/admin/auth/reset-password", {
+      method: "POST",
+      body: JSON.stringify({ ticket: resetTicket, password, confirmPassword }),
+    });
+    closeResetView();
+    show("#adminAlert", r.message, "success");
+    $("#password").value = "";
+    $("#password").focus();
+  } catch (e3) {
+    show("#resetAlert", e3.message);
+  }
+};
+
+// ลิงก์ในอีเมลพามาที่ admin.html?reset=1&email=... ให้เปิดขั้นตอนรอไว้เลย
+// แล้วล้าง query ออกจากแถบที่อยู่ เพื่อไม่ให้อีเมลค้างอยู่ในประวัติเบราว์เซอร์
+(() => {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get("reset") !== "1") return;
+  openResetView(params.get("email") || "");
+  showResetStep(2);
+  window.history.replaceState({}, "", window.location.pathname);
+})();
+
+// ===========================================================================
+// ตัวกรองหน่วยงานและการติ๊กเลือกผู้ใช้งาน เพื่อส่งรหัสยืนยันทางอีเมล
+// ===========================================================================
+function setupUserDepartmentFilter() {
+  const filter = $("#userDepartmentFilter");
+  if (!filter) return;
+
+  filter.innerHTML = [
+    '<option value="">ทุกหน่วยงาน</option>',
+    '<option value="none">ยังไม่ได้กำหนดหน่วยงาน</option>',
+    ...departments.map(
+      (d) =>
+        `<option value="${escapeHtml(d.id)}">${escapeHtml(d.name_th)}</option>`,
+    ),
+  ].join("");
+  filter.value = userDepartmentFilterId;
+
+  filter.onchange = () => {
+    userDepartmentFilterId = filter.value;
+    // เปลี่ยนตัวกรองแล้วล้างการเลือกทิ้ง เพราะรายการที่เห็นเปลี่ยนไปทั้งชุด
+    selectedUserIds = new Set();
+    $("#resetCodeResult").innerHTML = "";
+    loadGovernance("users");
+  };
+}
+
+// ติ๊ก/เอาติ๊กออกทุกแถวที่เลือกได้ในหน้าปัจจุบัน แถวที่ถูก disabled (บัญชี DEV
+// หรือบัญชีที่ยังไม่มีอีเมล) จะไม่ถูกแตะเลย เพราะส่งอีเมลให้ไม่ได้อยู่แล้ว
+function setAllUsersSelected(checked) {
+  document.querySelectorAll(".user-select").forEach((box) => {
+    box.checked = checked;
+    if (checked) selectedUserIds.add(box.dataset.userId);
+    else selectedUserIds.delete(box.dataset.userId);
+  });
+  renderUserSelectionBar();
+}
+
+function renderUserSelectionBar() {
+  const bar = $("#userSelectionBar");
+  if (!bar) return;
+  const selectable = document.querySelectorAll(".user-select").length;
+  const totalRows = document.querySelectorAll(
+    "#userGovernanceTable tbody tr",
+  ).length;
+
+  // ซ่อนแถบนี้เฉพาะตอนที่ยังไม่มีรายชื่อเลย ถ้ามีรายชื่อแต่ติ๊กไม่ได้สักคน
+  // ต้องแสดงเหตุผลไว้ ไม่เช่นนั้นผู้ใช้จะเห็นแค่ช่องที่กดไม่ได้โดยไม่รู้ว่าทำไม
+  bar.classList.toggle("hidden", totalRows === 0);
+
+  const hasSelectable = selectable > 0;
+  const count = $("#userSelectionCount");
+  if (count) {
+    count.textContent = hasSelectable
+      ? `เลือกไว้ ${selectedUserIds.size} คน`
+      : "ยังไม่มีบัญชีใดที่ส่งอีเมลได้ เพราะยังไม่ได้บันทึกอีเมล กรุณากดแก้ไขแล้วกรอกอีเมลก่อน";
+    count.classList.toggle("selection-hint", !hasSelectable);
+  }
+
+  const sendButton = $("#sendResetCodeButton");
+  if (sendButton) {
+    sendButton.classList.toggle("hidden", !hasSelectable);
+    sendButton.disabled = selectedUserIds.size === 0;
+  }
+  const clearButton = $("#clearUserSelection");
+  if (clearButton) {
+    clearButton.classList.toggle("hidden", !hasSelectable);
+    clearButton.disabled = selectedUserIds.size === 0;
+  }
+
+  const allButton = $("#selectAllUsersButton");
+  if (allButton) {
+    allButton.classList.toggle("hidden", !hasSelectable);
+    allButton.textContent =
+      selectedUserIds.size === selectable && selectable > 0
+        ? "ล้างการเลือกทั้งหมด"
+        : "เลือกทั้งหมด";
+  }
+
+  // ช่องหัวตารางสะท้อนสถานะจริง: ติ๊กครบ / ติ๊กบางส่วน / ไม่ติ๊กเลย
+  const selectAll = $("#userSelectAll");
+  if (selectAll) {
+    selectAll.disabled = !hasSelectable;
+    selectAll.checked = hasSelectable && selectedUserIds.size === selectable;
+    selectAll.indeterminate =
+      selectedUserIds.size > 0 && selectedUserIds.size < selectable;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// หน้าต่างยืนยันก่อนส่งอีเมล แสดงรายชื่อและอีเมลปลายทางทั้งหมดให้ตรวจก่อนกดจริง
+// ---------------------------------------------------------------------------
+const sendResetCodeDialog = $("#sendResetCodeDialog");
+
+function openSendResetCodeConfirm() {
+  if (selectedUserIds.size === 0) return;
+  const recipients = [...selectedUserIds]
+    .map((id) => selectableUserDirectory.get(id))
+    .filter(Boolean);
+
+  $("#sendResetCodeDescription").textContent =
+    `ระบบจะส่งรหัสยืนยัน 8 หลักสำหรับตั้งรหัสผ่านใหม่ ไปยังผู้ใช้งาน ${recipients.length} คนต่อไปนี้ ยืนยันหรือไม่?`;
+  $("#sendResetCodeList").innerHTML = recipients
+    .map(
+      (x) =>
+        `<li><strong>${escapeHtml(x.name)}</strong><span>${escapeHtml(x.email)}</span></li>`,
+    )
+    .join("");
+
+  if (!sendResetCodeDialog.open) sendResetCodeDialog.showModal();
+}
+
+const resetCodeStatusLabels = {
+  sent: { text: "ส่งอีเมลแล้ว", cls: "is-ok" },
+  mail_unavailable: { text: "ส่งอีเมลไม่ได้ — แจ้งรหัสด้วยตนเอง", cls: "is-warn" },
+  no_email: { text: "ยังไม่ได้บันทึกอีเมล", cls: "is-warn" },
+  inactive: { text: "บัญชีถูกระงับ", cls: "is-warn" },
+  dev_blocked: { text: "บัญชี DEV ตั้งรหัสใหม่ผ่านหน้าจอไม่ได้", cls: "is-warn" },
+};
+
+async function sendResetCodesToSelected() {
+  if (selectedUserIds.size === 0) return;
+  const button = $("#sendResetCodeButton");
+  if (button) button.disabled = true;
+  clear("#pageAlert");
+
+  try {
+    const r = await api("/api/admin/governance/users/send-reset-code", {
+      method: "POST",
+      body: JSON.stringify({ userIds: [...selectedUserIds] }),
+    });
+
+    const rows = r.data.results.map((item) => {
+      const status = resetCodeStatusLabels[item.status] ?? {
+        text: item.status,
+        cls: "is-warn",
+      };
+      // รหัสจะถูกส่งกลับมาเฉพาะกรณีที่ส่งอีเมลไม่สำเร็จ เพื่อให้ผู้ดูแลแจ้งเจ้าตัวเอง
+      const code = item.code
+        ? `<span class="temp-password">${escapeHtml(item.code)}</span>`
+        : "-";
+      return `<tr><td>${escapeHtml(item.displayName)}</td><td>${escapeHtml(item.email || "-")}</td><td><span class="reset-status ${status.cls}">${escapeHtml(status.text)}</span></td><td>${code}</td></tr>`;
+    });
+
+    $("#resetCodeResult").innerHTML = `
+      <div class="reset-result-box">
+        <h3>ผลการส่งรหัสยืนยัน</h3>
+        <p>
+          รหัสมีอายุ ${r.data.expiresInMinutes} นาที และใช้ได้เพียงครั้งเดียว
+          ${
+            r.data.mailConfigured
+              ? ""
+              : "<b>ระบบยังไม่ได้ตั้งค่าเซิร์ฟเวอร์อีเมล</b> จึงแสดงรหัสไว้ให้แจ้งเจ้าของบัญชีด้วยตนเอง รหัสนี้แสดงเพียงครั้งเดียว"
+          }
+        </p>
+        ${governanceTable(["ชื่อ", "อีเมล", "ผลการส่ง", "รหัสยืนยัน"], rows)}
+      </div>`;
+
+    setAllUsersSelected(false);
+  } catch (e) {
+    show("#pageAlert", e.message);
+  } finally {
+    if (button) button.disabled = false;
+    // ให้แถบเครื่องมือกลับไปสะท้อนจำนวนที่เลือกจริง (ปุ่มจะปิดเองถ้าไม่มีใครถูกเลือก)
+    renderUserSelectionBar();
+  }
+}
+
+$("#sendResetCodeButton").onclick = () => openSendResetCodeConfirm();
+$("#selectAllUsersButton").onclick = () => {
+  const selectable = document.querySelectorAll(".user-select").length;
+  setAllUsersSelected(selectedUserIds.size !== selectable);
+};
+$("#sendResetCodeCancelButton").onclick = () => sendResetCodeDialog.close();
+$("#sendResetCodeConfirmButton").onclick = async () => {
+  sendResetCodeDialog.close();
+  await sendResetCodesToSelected();
+};
+sendResetCodeDialog.addEventListener("click", (event) => {
+  if (isDialogBackdropClick(event, sendResetCodeDialog)) sendResetCodeDialog.close();
+});
+$("#clearUserSelection").onclick = () => setAllUsersSelected(false);

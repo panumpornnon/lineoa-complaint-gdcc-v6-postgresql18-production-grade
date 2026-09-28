@@ -6,6 +6,7 @@ import { z } from 'zod';
 import config from '../config.js';
 import { pool } from '../db.js';
 import { ApiError } from '../errors.js';
+import { logger } from '../logger.js';
 import { requireAdmin, requireRoles } from '../middleware/admin-auth.js';
 import {
   adminLoginSchema,
@@ -13,6 +14,7 @@ import {
   workProgressUpdateSchema,
 } from '../validators.js';
 import { notifyAssignmentChanged, notifyStatusChanged } from '../services/notifications.js';
+import { buildPasswordResetMail, isMailConfigured, sendMail } from '../services/mailer.js';
 import {
   cleanupStoredImageKeys,
   cleanupStoredImages,
@@ -21,6 +23,7 @@ import {
   uploadStaffWorkImages,
 } from '../services/uploads.js';
 import { escapeCsvField, toExcelText, parseCsv, unwrapExcelText } from '../utils/csv.js';
+import { checkPasswordStrength, describePasswordRequirements } from '../utils/password.js';
 
 const router = Router();
 
@@ -269,6 +272,372 @@ router.post('/session/closing', async (req, res) => {
   }
 
   return res.json({ success: true });
+});
+
+
+// ===========================================================================
+// ตั้งรหัสผ่านใหม่ด้วยรหัสยืนยัน 8 หลัก
+//
+// ขั้นตอนมีสามขั้น และทุกขั้นอยู่ก่อน middleware ตรวจสิทธิ์
+// เพราะผู้ที่ลืมรหัสผ่านย่อมเข้าสู่ระบบไม่ได้
+//   1. ขอรหัส       — ระบบส่งรหัสไปที่อีเมลของบัญชีนั้น
+//   2. ยืนยันรหัส    — ได้บัตรผ่านอายุสั้นกลับมา
+//   3. ตั้งรหัสใหม่  — ใช้บัตรผ่านนั้นยืนยันสิทธิ์
+//
+// เหตุผลที่แยกเป็นสามขั้นแทนที่จะส่งรหัสพร้อมรหัสผ่านใหม่ในครั้งเดียว
+// คือผู้ใช้จะได้รู้ทันทีว่ากรอกรหัสยืนยันถูกหรือผิด ก่อนเสียเวลาคิดรหัสผ่านใหม่
+// ===========================================================================
+
+const RESET_TICKET_AUDIENCE = 'complaint-password-reset';
+
+// ลิงก์ที่แนบไปในอีเมล พาผู้ใช้มาที่หน้าเข้าสู่ระบบพร้อมเปิดขั้นตอนกรอกรหัสยืนยันให้เลย
+// ใช้ค่าจาก APP_BASE_URL ถ้าตั้งไว้ ไม่เช่นนั้นอนุมานจากคำขอที่เข้ามา
+function buildResetUrl(req, email) {
+  const base = config.appBaseUrl || `${req.protocol}://${req.get('host') || ''}`;
+  if (!base || base.endsWith('://')) return '';
+  return `${base}/admin.html?reset=1&email=${encodeURIComponent(email)}`;
+}
+
+// ปิดบังอีเมลก่อนเขียนลง audit log เช่น somchai@suratcity.go.th -> s******i@suratcity.go.th
+// เพราะบรรทัดใน audit เปิดให้ระดับหัวหน้าและผู้บริหารอ่านได้ด้วย ไม่ควรเปิดเผยอีเมลเต็ม
+// ของคนที่ยังไม่ได้พิสูจน์ตัวตน และเส้นทางนี้ใครยิงเข้ามาก็ได้
+function maskEmail(value) {
+  const raw = String(value || '').trim();
+  const at = raw.lastIndexOf('@');
+  if (at <= 0) return '***';
+  const name = raw.slice(0, at);
+  const domain = raw.slice(at);
+  if (name.length <= 2) return `${name[0]}*${domain}`;
+  return `${name[0]}${'*'.repeat(Math.min(name.length - 2, 8))}${name[name.length - 1]}${domain}`;
+}
+
+// เขียน audit จากเส้นทางที่ยังไม่มีผู้ใช้เข้าสู่ระบบ จึงระบุ actor เองแทนที่จะอ่านจาก req.admin
+// ห้ามให้การเขียน audit ล้มเหลวแล้วทำให้คำขอพัง เพราะจะกลายเป็นช่องบอกใบ้ว่าอีเมลมีจริงหรือไม่
+async function writeAnonymousAudit(req, { actorId = null, action, entityId = null, detail = {} }, executor = pool) {
+  try {
+    await executor.query(
+      `INSERT INTO audit_logs (actor_staff_user_id, action, entity_type, entity_id, detail, ip_address, user_agent)
+       VALUES ($1, $2, 'staff_user', $3, $4::jsonb, $5, $6)`,
+      [
+        actorId,
+        action,
+        // entity_id เป็น varchar ส่งเป็นข้อความเสมอ กัน uuid หลุดเข้าไปตรงๆ
+        entityId === null || entityId === undefined ? null : String(entityId),
+        JSON.stringify(detail),
+        req.ip || null,
+        req.get('user-agent') || null,
+      ],
+    );
+  } catch (error) {
+    logger.error('audit_write_failed', { action, message: error.message });
+  }
+}
+
+// รหัสแปดหลักสร้างจากตัวสร้างเลขสุ่มเชิงรหัสลับ ไม่ใช่ Math.random
+// เพราะเป็นค่าที่ใช้ยืนยันสิทธิ์เข้าถึงบัญชี
+function generateResetCode() {
+  return String(crypto.randomInt(0, 100_000_000)).padStart(8, '0');
+}
+
+// สร้างรหัสใหม่ให้ผู้ใช้หนึ่งคน พร้อมยกเลิกใบเก่าที่ยังไม่ได้ใช้
+// คืนค่ารหัสตัวจริงกลับไป ผู้เรียกต้องรับผิดชอบว่าจะส่งทางใด
+async function issueResetCode(client, { userId, requestedBy = null, ip = null }) {
+  await client.query(
+    `UPDATE password_reset_codes
+        SET used_at = current_timestamp
+      WHERE staff_user_id = $1
+        AND used_at IS NULL`,
+    [userId],
+  );
+
+  const code = generateResetCode();
+  const codeHash = await bcrypt.hash(code, 10);
+
+  await client.query(
+    `INSERT INTO password_reset_codes
+       (staff_user_id, code_hash, expires_at, requested_by_staff_user_id, ip_address)
+     VALUES ($1, $2, current_timestamp + make_interval(mins => $3), $4, $5)`,
+    [userId, codeHash, config.passwordResetCodeMinutes, requestedBy, ip],
+  );
+
+  return code;
+}
+
+// ---------------------------------------------------------------------------
+// ขั้นที่ 1 — เจ้าของบัญชีกดขอรหัสเองจากหน้าเข้าสู่ระบบ
+// ---------------------------------------------------------------------------
+router.post('/auth/forgot-password', async (req, res) => {
+  const parsed = z
+    .object({ email: z.string().trim().email().max(254) })
+    .safeParse(req.body);
+
+  // ตอบข้อความเดียวกันเสมอไม่ว่าจะพบอีเมลนั้นในระบบหรือไม่ ไม่เช่นนั้นหน้านี้
+  // จะกลายเป็นเครื่องมือให้คนภายนอกไล่ตรวจว่าอีเมลใดเป็นของเจ้าหน้าที่บ้าง
+  const genericResponse = {
+    success: true,
+    message:
+      'หากอีเมลนี้มีอยู่ในระบบ ระบบได้ส่งลิงก์พร้อมรหัสยืนยัน 8 หลักไปให้แล้ว กรุณาตรวจสอบกล่องจดหมาย',
+  };
+
+  if (!parsed.success) return res.json(genericResponse);
+
+  const email = parsed.data.email;
+  const result = await pool.query(
+    `SELECT id, username, display_name, email
+       FROM staff_users
+      WHERE lower(email) = lower($1)
+        AND is_active = true
+        AND role <> 'dev'
+      LIMIT 1`,
+    [email],
+  );
+
+  const user = result.rows[0];
+  if (!user) {
+    logger.info('password_reset_requested_unknown', {});
+    // บันทึกไว้ด้วย เพราะการไล่ยิงอีเมลที่ไม่มีในระบบคือสัญญาณของการสุ่มเดาบัญชี
+    // แต่คำตอบที่ส่งกลับไปยังเหมือนเดิมทุกประการ ผู้ยิงจึงแยกไม่ออก
+    await writeAnonymousAudit(req, {
+      action: 'auth.password_reset_requested_unknown',
+      detail: { email: maskEmail(email) },
+    });
+    return res.json(genericResponse);
+  }
+
+  const client = await pool.connect();
+  let code;
+  try {
+    await client.query('BEGIN');
+    code = await issueResetCode(client, {
+      userId: user.id,
+      ip: (req.ip || '').slice(0, 45) || null,
+    });
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+
+  const mail = buildPasswordResetMail({
+    displayName: user.display_name,
+    code,
+    minutes: config.passwordResetCodeMinutes,
+    resetUrl: buildResetUrl(req, user.email),
+  });
+  const outcome = await sendMail({ to: user.email, ...mail });
+
+  await writeAnonymousAudit(req, {
+    actorId: user.id,
+    action: 'auth.password_reset_requested',
+    entityId: user.id,
+    detail: {
+      username: user.username,
+      email: maskEmail(user.email),
+      channel: 'self_service',
+      mail_sent: Boolean(outcome.sent),
+      expires_in_minutes: config.passwordResetCodeMinutes,
+    },
+  });
+
+  // ไม่ส่งรหัสกลับไปในคำตอบเด็ดขาด แม้ส่งอีเมลไม่สำเร็จ
+  // เพราะเส้นทางนี้เปิดให้ทุกคนเรียกได้โดยไม่ต้องเข้าสู่ระบบ
+  return res.json(genericResponse);
+});
+
+// ---------------------------------------------------------------------------
+// ขั้นที่ 2 — ยืนยันรหัส 8 หลัก
+// ---------------------------------------------------------------------------
+router.post('/auth/verify-reset-code', async (req, res) => {
+  const parsed = z
+    .object({
+      email: z.string().trim().email().max(254),
+      code: z.string().trim().regex(/^\d{8}$/, 'รหัสยืนยันต้องเป็นตัวเลข 8 หลัก'),
+    })
+    .safeParse(req.body);
+
+  if (!parsed.success) {
+    throw new ApiError(400, 'รหัสยืนยันต้องเป็นตัวเลข 8 หลัก');
+  }
+
+  const invalid = new ApiError(400, 'รหัสยืนยันไม่ถูกต้องหรือหมดอายุแล้ว');
+
+  const result = await pool.query(
+    `SELECT prc.id,
+            prc.code_hash,
+            prc.attempts,
+            u.id AS user_id,
+            u.display_name
+       FROM password_reset_codes prc
+       JOIN staff_users u ON u.id = prc.staff_user_id
+      WHERE lower(u.email) = lower($1)
+        AND u.is_active = true
+        AND prc.used_at IS NULL
+        AND prc.expires_at > current_timestamp
+        AND prc.attempts < $2
+      ORDER BY prc.created_at DESC
+      LIMIT 1`,
+    [parsed.data.email, config.passwordResetMaxAttempts],
+  );
+
+  const row = result.rows[0];
+  if (!row) throw invalid;
+
+  const matched = await bcrypt.compare(parsed.data.code, row.code_hash);
+  if (!matched) {
+    // นับครั้งที่กรอกผิด ครบเกณฑ์แล้วใบนี้ใช้ไม่ได้อีก ต้องขอใบใหม่
+    await pool.query(
+      `UPDATE password_reset_codes SET attempts = attempts + 1 WHERE id = $1`,
+      [row.id],
+    );
+    const left = config.passwordResetMaxAttempts - row.attempts - 1;
+    await writeAnonymousAudit(req, {
+      actorId: row.user_id,
+      action: 'auth.password_reset_code_failed',
+      entityId: row.user_id,
+      detail: { attempts_used: row.attempts + 1, attempts_left: Math.max(left, 0) },
+    });
+    throw new ApiError(
+      400,
+      left > 0
+        ? `รหัสยืนยันไม่ถูกต้อง เหลือโอกาสอีก ${left} ครั้ง`
+        : 'กรอกรหัสผิดเกินจำนวนที่กำหนด รหัสชุดนี้ใช้ไม่ได้แล้ว กรุณาขอรหัสใหม่',
+    );
+  }
+
+  // บัตรผ่านอายุสั้น ใช้ยืนยันในขั้นที่ 3 เท่านั้น
+  // ผูกกับใบรหัสใบนี้โดยตรง จึงนำไปใช้ซ้ำกับใบอื่นไม่ได้
+  const ticket = jwt.sign(
+    { resetCodeId: row.id },
+    config.jwtSecret,
+    {
+      subject: row.user_id,
+      issuer: 'lineoa-complaint-gdcc',
+      audience: RESET_TICKET_AUDIENCE,
+      expiresIn: '10m',
+    },
+  );
+
+  await writeAnonymousAudit(req, {
+    actorId: row.user_id,
+    action: 'auth.password_reset_code_verified',
+    entityId: row.user_id,
+    detail: {},
+  });
+
+  res.json({ success: true, data: { ticket, displayName: row.display_name } });
+});
+
+// ---------------------------------------------------------------------------
+// ขั้นที่ 3 — ตั้งรหัสผ่านใหม่
+// ---------------------------------------------------------------------------
+router.post('/auth/reset-password', async (req, res) => {
+  const parsed = z
+    .object({
+      ticket: z.string().min(1).max(4000),
+      password: z.string().min(1).max(200),
+      confirmPassword: z.string().min(1).max(200),
+    })
+    .safeParse(req.body);
+
+  if (!parsed.success) {
+    throw new ApiError(400, 'ข้อมูลที่ส่งมาไม่ถูกต้อง');
+  }
+
+  if (parsed.data.password !== parsed.data.confirmPassword) {
+    throw new ApiError(400, 'รหัสผ่านทั้งสองช่องไม่ตรงกัน');
+  }
+
+  // ตรวจซ้ำที่เซิร์ฟเวอร์เสมอ แม้หน้าเว็บจะตรวจให้แล้ว
+  // เพราะการตรวจฝั่งหน้าเว็บอย่างเดียวข้ามได้ด้วยการยิงคำขอตรง
+  const weak = checkPasswordStrength(parsed.data.password);
+  if (weak.length) {
+    throw new ApiError(400, describePasswordRequirements(weak));
+  }
+
+  let payload;
+  try {
+    payload = jwt.verify(parsed.data.ticket, config.jwtSecret, {
+      issuer: 'lineoa-complaint-gdcc',
+      audience: RESET_TICKET_AUDIENCE,
+    });
+  } catch {
+    throw new ApiError(400, 'การยืนยันหมดอายุ กรุณาเริ่มขั้นตอนใหม่');
+  }
+
+  const passwordHash = await bcrypt.hash(parsed.data.password, 12);
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+
+    // ใช้ใบรหัสให้หมดสิทธิ์ก่อน ถ้าถูกใช้ไปแล้วจะไม่มีแถวคืนมา
+    // จึงกันการนำบัตรผ่านใบเดิมมายิงซ้ำสองครั้ง
+    const consumed = await client.query(
+      `UPDATE password_reset_codes
+          SET used_at = current_timestamp
+        WHERE id = $1
+          AND staff_user_id = $2
+          AND used_at IS NULL
+          AND expires_at > current_timestamp
+      RETURNING id`,
+      [payload.resetCodeId, payload.sub],
+    );
+
+    if (!consumed.rowCount) {
+      await client.query('ROLLBACK');
+      throw new ApiError(400, 'การยืนยันนี้ถูกใช้ไปแล้วหรือหมดอายุ กรุณาเริ่มขั้นตอนใหม่');
+    }
+
+    await client.query(
+      `UPDATE staff_users
+          SET password_hash = $2,
+              updated_at = current_timestamp
+        WHERE id = $1
+          AND is_active = true`,
+      [payload.sub, passwordHash],
+    );
+
+    // เปลี่ยนรหัสผ่านแล้วต้องเตะเซสชันเดิมออกทั้งหมด
+    // ไม่เช่นนั้นผู้ที่ถือ token เก่าจะยังใช้งานต่อได้จนกว่าจะหมดอายุ
+    await client.query(
+      `UPDATE staff_sessions
+          SET revoked_at = current_timestamp,
+              revoked_reason = 'password_changed'
+        WHERE staff_user_id = $1
+          AND revoked_at IS NULL`,
+      [payload.sub],
+    );
+
+    // ต้องแยกพารามิเตอร์ของ actor_staff_user_id กับ entity_id ออกจากกัน
+    // แม้ค่าจะเป็นตัวเดียวกัน เพราะ actor_staff_user_id เป็น uuid
+    // ส่วน entity_id เป็น varchar(100) ถ้าใช้ $1 ร่วมกันทั้งสองที่
+    // PostgreSQL จะอนุมานชนิดของ $1 เป็น uuid จากการใช้ครั้งแรก
+    // แล้วปฏิเสธการนำไปใส่คอลัมน์ varchar เพราะไม่มี implicit cast
+    await client.query(
+      `INSERT INTO audit_logs (actor_staff_user_id, action, entity_type, entity_id, detail, ip_address, user_agent)
+       VALUES ($1, 'auth.password_reset', 'staff_user', $2, $3::jsonb, $4, $5)`,
+      [
+        payload.sub,
+        String(payload.sub),
+        // เก็บแค่ว่าเปลี่ยนผ่านช่องทางใด ไม่เก็บรหัสผ่านใหม่ รหัสยืนยัน
+        // หรือสิ่งใดที่ย้อนกลับไปหาค่าเหล่านั้นได้
+        JSON.stringify({ channel: 'self_service' }),
+        req.ip || null,
+        req.get('user-agent') || null,
+      ],
+    );
+
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+
+  res.json({ success: true, message: 'ตั้งรหัสผ่านใหม่เรียบร้อย กรุณาเข้าสู่ระบบด้วยรหัสผ่านใหม่' });
 });
 
 router.use(requireAdmin);
@@ -1901,11 +2270,27 @@ router.delete('/governance/staff-profiles/:id', requireRoles('admin', 'dev'), as
 });
 
 router.get('/governance/users', requireRoles('admin', 'dev'), async (req, res) => {
+  // ตัวกรองหน่วยงาน รับได้สามแบบ คือเว้นว่างหมายถึงทุกหน่วยงาน
+  // ค่า none หมายถึงเฉพาะผู้ที่ยังไม่ได้สังกัดหน่วยงานใด และรหัสหน่วยงานแบบ uuid
+  const rawDepartment = String(req.query.departmentId ?? '').trim();
+  const values = [];
+  let where = '';
+
+  if (rawDepartment === 'none') {
+    where = 'WHERE su.department_id IS NULL';
+  } else if (rawDepartment) {
+    const parsed = z.string().uuid().safeParse(rawDepartment);
+    if (!parsed.success) throw new ApiError(400, 'รหัสหน่วยงานไม่ถูกต้อง');
+    values.push(parsed.data);
+    where = 'WHERE su.department_id = $1';
+  }
+
   const result = await pool.query(
     `SELECT
         su.id,
         su.username,
         su.display_name,
+        su.email,
         su.role,
         su.department_id,
         su.is_active,
@@ -1915,7 +2300,9 @@ router.get('/governance/users', requireRoles('admin', 'dev'), async (req, res) =
         d.name_th AS department_name
        FROM staff_users su
        LEFT JOIN departments d ON d.id = su.department_id
+      ${where}
       ORDER BY su.display_name`,
+    values,
   );
 
   res.json({ success: true, data: result.rows });
@@ -1928,6 +2315,8 @@ router.post('/governance/users', requireRoles('admin', 'dev'), async (req, res) 
     displayName: z.string().trim().min(2).max(200),
     role: z.enum(['officer', 'supervisor', 'executive', 'admin', 'dev']),
     departmentId: z.string().uuid().nullable().optional(),
+    // อีเมลบังคับกรอก เพราะเป็นช่องทางเดียวที่เจ้าของบัญชีใช้ตั้งรหัสผ่านใหม่เองได้
+    email: z.string().trim().email('กรุณากรอกอีเมลให้ถูกต้อง').max(254),
   });
 
   const parsed = schema.safeParse(req.body);
@@ -1988,8 +2377,9 @@ router.post('/governance/users', requireRoles('admin', 'dev'), async (req, res) 
           password_hash,
           display_name,
           role,
-          department_id
-       ) VALUES ($1, $2, $3, $4, $5)
+          department_id,
+          email
+       ) VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING
           id,
           username,
@@ -2004,6 +2394,7 @@ router.post('/governance/users', requireRoles('admin', 'dev'), async (req, res) 
         parsed.data.displayName,
         parsed.data.role,
         departmentId,
+        parsed.data.email,
       ],
     );
   } catch (error) {
@@ -2044,6 +2435,7 @@ router.patch('/governance/users/:id', requireRoles('admin', 'dev'), async (req, 
     departmentId: z.string().uuid().nullable().optional(),
     isActive: z.boolean(),
     password: z.string().min(12).max(200).nullable().optional(),
+    email: z.string().trim().email('กรุณากรอกอีเมลให้ถูกต้อง').max(254),
   });
 
   const parsed = schema.safeParse(req.body);
@@ -2120,6 +2512,7 @@ router.patch('/governance/users/:id', requireRoles('admin', 'dev'), async (req, 
     parsed.data.role,
     departmentId,
     parsed.data.isActive,
+    parsed.data.email,
   ];
 
   let passwordSql = '';
@@ -2138,7 +2531,8 @@ router.patch('/governance/users/:id', requireRoles('admin', 'dev'), async (req, 
           SET display_name = $1,
               role = $2,
               department_id = $3,
-              is_active = $4
+              is_active = $4,
+              email = $5
               ${passwordSql},
               updated_at = current_timestamp
         WHERE id = $${values.length}
@@ -2180,6 +2574,103 @@ router.patch('/governance/users/:id', requireRoles('admin', 'dev'), async (req, 
   );
 
   res.json({ success: true, data: result.rows[0] });
+});
+
+
+// ---------------------------------------------------------------------------
+// ผู้ดูแลติ๊กเลือกผู้ใช้งานแล้วกดส่งรหัสยืนยันให้ทางอีเมล
+//
+// ต่างจากเส้นทางที่เจ้าของบัญชีกดขอเอง ตรงที่เส้นทางนี้บอกผลรายคนได้
+// ว่าส่งสำเร็จหรือไม่ เพราะผู้เรียกเป็นผู้ดูแลที่เห็นรายชื่อผู้ใช้อยู่แล้ว
+// จึงไม่มีความเสี่ยงเรื่องการไล่ตรวจว่าบัญชีใดมีอยู่จริง
+//
+// หากยังไม่ได้ตั้งค่า SMTP จะคืนรหัสกลับมาแสดงบนหน้าจอให้ผู้ดูแลแจ้งเจ้าตัวเอง
+// ทางโทรศัพท์หรือ LINE เพื่อให้ใช้งานได้ระหว่างที่ยังเปิดพอร์ตไม่ได้
+// ---------------------------------------------------------------------------
+router.post('/governance/users/send-reset-code', requireRoles('admin', 'dev'), async (req, res) => {
+  const parsed = z
+    .object({ userIds: z.array(z.string().uuid()).min(1).max(50) })
+    .safeParse(req.body);
+
+  if (!parsed.success) {
+    throw new ApiError(400, 'กรุณาเลือกผู้ใช้งานอย่างน้อยหนึ่งคน และไม่เกิน 50 คนต่อครั้ง');
+  }
+
+  const usersResult = await pool.query(
+    `SELECT id, username, display_name, email, role, is_active
+       FROM staff_users
+      WHERE id = ANY($1::uuid[])`,
+    [parsed.data.userIds],
+  );
+
+  const mailReady = isMailConfigured();
+  const results = [];
+
+  for (const user of usersResult.rows) {
+    if (!user.is_active) {
+      results.push({ username: user.username, displayName: user.display_name, status: 'inactive' });
+      continue;
+    }
+    // บัญชีสิทธิ์สูงสุดต้องไม่ถูกตั้งรหัสใหม่ผ่านหน้าจอ ด้วยเหตุผลเดียวกับ
+    // ที่ห้ามแก้ไขบัญชี DEV จากหน้าจัดการผู้ใช้งานและห้ามนำเข้าผ่านไฟล์
+    if (user.role === 'dev') {
+      results.push({ username: user.username, displayName: user.display_name, status: 'dev_blocked' });
+      continue;
+    }
+    if (!user.email) {
+      results.push({ username: user.username, displayName: user.display_name, status: 'no_email' });
+      continue;
+    }
+
+    const client = await pool.connect();
+    let code;
+    try {
+      await client.query('BEGIN');
+      code = await issueResetCode(client, {
+        userId: user.id,
+        requestedBy: req.admin.id,
+        ip: (req.ip || '').slice(0, 45) || null,
+      });
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {});
+      client.release();
+      throw error;
+    }
+    client.release();
+
+    const mail = buildPasswordResetMail({
+      displayName: user.display_name,
+      code,
+      minutes: config.passwordResetCodeMinutes,
+      resetUrl: buildResetUrl(req, user.email),
+    });
+    const outcome = await sendMail({ to: user.email, ...mail });
+
+    results.push({
+      username: user.username,
+      displayName: user.display_name,
+      email: user.email,
+      status: outcome.sent ? 'sent' : 'mail_unavailable',
+      // แสดงรหัสบนหน้าจอเฉพาะเมื่อส่งอีเมลไม่ได้ เพื่อให้ผู้ดูแลแจ้งเจ้าตัวเอง
+      ...(outcome.sent ? {} : { code }),
+    });
+  }
+
+  await writeAudit(req, 'staff.send_reset_code', 'staff_user', null, {
+    requested: parsed.data.userIds.length,
+    sent: results.filter((r) => r.status === 'sent').length,
+    mail_configured: mailReady,
+  });
+
+  res.json({
+    success: true,
+    data: {
+      mailConfigured: mailReady,
+      expiresInMinutes: config.passwordResetCodeMinutes,
+      results,
+    },
+  });
 });
 
 router.delete('/governance/users/:id', requireRoles('admin', 'dev'), async (req, res) => {
@@ -2254,33 +2745,11 @@ router.delete('/governance/users/:id', requireRoles('admin', 'dev'), async (req,
 });
 
 router.get('/governance/audit-logs', requireRoles('admin','dev','supervisor','executive','exclusive'), async (req, res) => {
-  if (canReadAllDepartments(req.admin.role)) {
-    const result = await pool.query(
-      `SELECT
-          a.id,
-          a.action,
-          a.entity_type,
-          a.entity_id,
-          a.detail,
-          a.ip_address,
-          a.created_at,
-          s.display_name AS actor_name
-       FROM audit_logs a
-       LEFT JOIN staff_users s ON s.id = a.actor_staff_user_id
-       ORDER BY a.created_at DESC
-       LIMIT 200`,
-    );
-
-    return res.json({ success: true, data: result.rows });
-  }
-
-  const departmentId = getAdminDepartmentId(req);
-  if (!departmentId) {
-    throw new ApiError(403, 'บัญชีนี้ยังไม่ได้กำหนดหน่วยงาน');
-  }
-
-  const result = await pool.query(
-    `SELECT
+  // ส่วนที่ใช้ร่วมกันทุกสิทธิ์
+  // t คือบัญชีที่ถูกกระทำ ใช้กับแถวประเภท staff_user เช่น กิจกรรมลืมรหัสผ่าน
+  // c คือเรื่องร้องเรียนที่แถวนั้นอ้างถึง ใช้ตัดสินว่าอยู่หน่วยงานใด
+  const baseSql = `
+    SELECT
         a.id,
         a.action,
         a.entity_type,
@@ -2290,13 +2759,50 @@ router.get('/governance/audit-logs', requireRoles('admin','dev','supervisor','ex
         a.created_at,
         s.display_name AS actor_name
      FROM audit_logs a
-     JOIN complaints c
-       ON a.entity_type = 'complaint'
-      AND a.entity_id = c.id::text
      LEFT JOIN staff_users s ON s.id = a.actor_staff_user_id
-     WHERE c.department_id = $1
+     LEFT JOIN staff_users t
+            ON a.entity_type = 'staff_user'
+           AND t.id::text = a.entity_id
+     LEFT JOIN complaints c
+            ON a.entity_type = 'complaint'
+           AND c.id::text = a.entity_id`;
+
+  const tail = `
      ORDER BY a.created_at DESC
-     LIMIT 200`,
+     LIMIT 200`;
+
+  // admin และ dev ดูแลระบบทั้งหมด จึงเห็นทุกแถวโดยไม่มีเงื่อนไข
+  if (isSystemAdminRole(req.admin.role)) {
+    const result = await pool.query(`${baseSql}${tail}`);
+    return res.json({ success: true, data: result.rows });
+  }
+
+  // executive และ exclusive เห็นได้ทุกหน่วยงาน แต่ไม่เห็นการกระทำฝั่งผู้ดูแลระบบ
+  // ทั้งกรณีที่ admin/dev เป็นผู้ลงมือ และกรณีที่บัญชี admin/dev เป็นเป้าหมาย
+  if (isGlobalReadOnlyRole(req.admin.role)) {
+    const result = await pool.query(
+      `${baseSql}
+     WHERE COALESCE(s.role::text, '') NOT IN ('admin', 'dev')
+       AND COALESCE(t.role::text, '') NOT IN ('admin', 'dev')${tail}`,
+    );
+    return res.json({ success: true, data: result.rows });
+  }
+
+  // supervisor เห็นเฉพาะหน่วยงานตัวเอง ทั้งแถวที่ผูกกับเรื่องร้องเรียนของหน่วยงาน
+  // และแถวที่เกี่ยวกับเจ้าหน้าที่ในหน่วยงานเดียวกัน (เช่น การขอรหัสเพราะลืมรหัสผ่าน)
+  const departmentId = getAdminDepartmentId(req);
+  if (!departmentId) {
+    throw new ApiError(403, 'บัญชีนี้ยังไม่ได้กำหนดหน่วยงาน');
+  }
+
+  const result = await pool.query(
+    `${baseSql}
+     WHERE COALESCE(s.role::text, '') NOT IN ('admin', 'dev')
+       AND COALESCE(t.role::text, '') NOT IN ('admin', 'dev')
+       AND (
+             (a.entity_type = 'complaint' AND c.department_id = $1)
+          OR (a.entity_type = 'staff_user' AND (s.department_id = $1 OR t.department_id = $1))
+       )${tail}`,
     [departmentId],
   );
 
@@ -2381,6 +2887,7 @@ const TRANSFER_DATASETS = {
       'display_name',
       'role',
       'department_code',
+      'email',
       'is_active',
       'password',
       'last_login_at',
@@ -2390,6 +2897,7 @@ const TRANSFER_DATASETS = {
                        su.display_name,
                        su.role,
                        d.code AS department_code,
+                       su.email,
                        su.is_active,
                        '' AS password,
                        su.last_login_at
@@ -2519,6 +3027,8 @@ async function analyzeImport(csvText, currentUsername = null) {
 
   let existingByKey = new Map();
   let lineIdOwner = new Map();
+  // อีเมล -> username เจ้าของ ใช้กันอีเมลซ้ำทั้งกับข้อมูลเดิมในฐานข้อมูลและซ้ำกันเองในไฟล์
+  const emailOwnerByEmail = new Map();
 
   if (datasetName === 'departments') {
     const rows = await pool.query(`SELECT code FROM departments`);
@@ -2528,9 +3038,12 @@ async function analyzeImport(csvText, currentUsername = null) {
     existingByKey = new Map(rows.rows.map((r) => [r.code, r]));
   } else if (datasetName === 'users') {
     const rows = await pool.query(
-      `SELECT lower(username) AS key, username, role FROM staff_users`,
+      `SELECT lower(username) AS key, username, role, email FROM staff_users`,
     );
     existingByKey = new Map(rows.rows.map((r) => [r.key, r]));
+    for (const r of rows.rows) {
+      if (r.email) emailOwnerByEmail.set(String(r.email).toLowerCase(), r.key);
+    }
   } else {
     const rows = await pool.query(
       `SELECT sp.full_name, sp.line_id, d.code AS department_code
@@ -2597,6 +3110,7 @@ async function analyzeImport(csvText, currentUsername = null) {
       const departmentCode = normalizeText(cell(row, 'department_code'));
       const isActive = parseBoolean(cell(row, 'is_active'));
       const password = normalizeText(cell(row, 'password'));
+      const email = normalizeText(cell(row, 'email'));
 
       key = username ? username.toLowerCase() : null;
       const existing = key ? existingByKey.get(key) : null;
@@ -2629,6 +3143,19 @@ async function analyzeImport(csvText, currentUsername = null) {
         problems.push('สิทธิ์ Officer และ Supervisor ต้องระบุหน่วยงาน (department_code)');
       }
 
+      // อีเมลบังคับกรอกเหมือนหน้าจัดการผู้ใช้งาน เพราะเป็นช่องทางเดียว
+      // ที่เจ้าของบัญชีใช้ขอรหัสยืนยันเพื่อตั้งรหัสผ่านใหม่ด้วยตนเองได้
+      if (!email) {
+        problems.push('ไม่ได้ระบุอีเมล (email) ซึ่งเป็นข้อมูลที่ต้องกรอก');
+      } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254) {
+        problems.push(`อีเมล ${email} ไม่ถูกต้องตามรูปแบบ`);
+      } else {
+        const owner = emailOwnerByEmail.get(email.toLowerCase());
+        if (owner && owner !== key) {
+          problems.push(`อีเมล ${email} ถูกใช้โดยบัญชี ${owner} อยู่แล้ว`);
+        }
+      }
+
       if (password && (password.length < 12 || password.length > 200)) {
         problems.push('รหัสผ่านต้องยาว 12 ถึง 200 ตัวอักษร');
       }
@@ -2643,11 +3170,14 @@ async function analyzeImport(csvText, currentUsername = null) {
         if (role && role !== existing.role) problems.push('ไม่สามารถเปลี่ยนสิทธิ์ของบัญชีที่กำลังใช้อยู่ได้');
       }
 
+      if (email && key) emailOwnerByEmail.set(email.toLowerCase(), key);
+
       values = {
         username,
         display_name: displayName,
         role,
         department_code: needsDepartment ? departmentCode : null,
+        email,
         is_active: isActive,
         password,
       };
@@ -2851,11 +3381,11 @@ router.post('/governance/import/commit', requireRoles('admin', 'dev'), async (re
 
         if (isNew) {
           await client.query(
-            `INSERT INTO staff_users (username, password_hash, display_name, role, department_id, is_active)
-             SELECT $1, $2, $3, $4, d.id, $6
+            `INSERT INTO staff_users (username, password_hash, display_name, role, department_id, is_active, email)
+             SELECT $1, $2, $3, $4, d.id, $6, $7
                FROM (SELECT 1) AS anchor
                LEFT JOIN departments d ON d.code = $5`,
-            [v.username, passwordHash, v.display_name, v.role, v.department_code, v.is_active],
+            [v.username, passwordHash, v.display_name, v.role, v.department_code, v.is_active, v.email],
           );
         } else {
           await client.query(
@@ -2865,11 +3395,12 @@ router.post('/governance/import/commit', requireRoles('admin', 'dev'), async (re
                     department_id = target.department_id,
                     is_active = $5,
                     password_hash = COALESCE($6, su.password_hash),
+                    email = $7,
                     updated_at = current_timestamp
                FROM (SELECT d.id AS department_id FROM (SELECT 1) AS anchor
                       LEFT JOIN departments d ON d.code = $4) AS target
               WHERE lower(su.username) = lower($1)`,
-            [v.username, v.display_name, v.role, v.department_code, v.is_active, passwordHash],
+            [v.username, v.display_name, v.role, v.department_code, v.is_active, passwordHash, v.email],
           );
         }
 

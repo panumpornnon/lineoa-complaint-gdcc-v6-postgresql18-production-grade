@@ -15,12 +15,12 @@ const isProduction = nodeEnv === 'production';
 const renderHostname = (process.env.RENDER_EXTERNAL_HOSTNAME || '').trim();
 const defaultBaseUrl = renderHostname
   ? `https://${renderHostname}`
-  : 'http://localhost:3000';
+  : 'http://localhost:3010';
 
 const config = {
   nodeEnv,
   isProduction,
-  port: asInteger(process.env.PORT, 3000),
+  port: asInteger(process.env.PORT, 3010),
   logLevel: process.env.LOG_LEVEL || (isProduction ? 'info' : 'debug'),
   requestTimeoutMs: asInteger(process.env.REQUEST_TIMEOUT_MS, 30000),
   shutdownTimeoutMs: asInteger(process.env.SHUTDOWN_TIMEOUT_MS, 15000),
@@ -65,6 +65,24 @@ const config = {
   // ภายในเวลานี้ ถือว่าปิดจริง แล้วปล่อยให้บัญชีเข้าสู่ระบบจากเครื่องอื่นได้
   // ต้องยาวพอให้การกดรีเฟรชหน้าจอโหลดเสร็จและยิงคำขอแรกออกมาได้ทัน
   sessionClosingGraceSeconds: 15,
+
+  // ---------------------------------------------------------------------
+  // การส่งอีเมล ใช้ส่งรหัสยืนยันเมื่อขอตั้งรหัสผ่านใหม่
+  // ถ้ายังไม่ได้ตั้งค่า SMTP ระบบยังทำงานได้ตามปกติ เพียงแต่ส่งอีเมลไม่ได้
+  // ช่องทางที่ผู้ดูแลกดส่งจะแสดงรหัสบนหน้าจอแทน เพื่อให้แจ้งเจ้าตัวเองได้
+  // ---------------------------------------------------------------------
+  smtpHost: (process.env.SMTP_HOST || '').trim(),
+  smtpPort: Number.parseInt(process.env.SMTP_PORT || '587', 10),
+  smtpSecure: asBoolean(process.env.SMTP_SECURE, false),
+  smtpUser: (process.env.SMTP_USER || '').trim(),
+  smtpPassword: process.env.SMTP_PASSWORD || '',
+  smtpFrom: (process.env.SMTP_FROM || '').trim(),
+
+
+  // อายุของรหัสยืนยัน และจำนวนครั้งที่ยอมให้กรอกผิด
+  // รหัสมีอายุ 5 นาที และใช้ได้เพียงครั้งเดียว (บันทึก used_at แล้วถือว่าใช้แล้ว)
+  passwordResetCodeMinutes: 5,
+  passwordResetMaxAttempts: 5,
 
 
   devBypassLineAuth:

@@ -9,7 +9,7 @@
     <meta name="theme-color" content="#083f3a" />
     <title>Smart City Complaint Command Center</title>
     <link rel="stylesheet" href="/styles.css?v=20260727-image-viewer-1" />
-    <link rel="stylesheet" href="/admin-v3.css?v=20260924-session-close-1" />
+    <link rel="stylesheet" href="/admin-v3.css?v=20260928-email-required-7" />
     <link
       rel="stylesheet"
       href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
@@ -19,7 +19,7 @@
       src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
       crossorigin="anonymous"
     ></script>
-    <script type="module" src="/admin.js?v=20260924-session-close-1"></script>
+    <script type="module" src="/admin.js?v=20260928-email-required-7"></script>
   </head>
   <body class="admin-v3-body">
     <section id="loginPanel" class="v3-login">
@@ -74,9 +74,85 @@
               เข้าสู่ระบบอย่างปลอดภัย
             </button>
           </form>
+          <button id="forgotPasswordLink" class="v3-text-btn login-forgot" type="button">
+            ลืมรหัสผ่าน?
+          </button>
           <small class="security-note"
             >🔒 ระบบใช้ JWT, HTTPS และบันทึกประวัติการใช้งาน</small
           >
+        </div>
+
+        <!-- ขั้นตอนตั้งรหัสผ่านใหม่ แสดงแทนกล่องเข้าสู่ระบบเมื่อกดลืมรหัสผ่าน -->
+        <div id="resetCard" class="login-card hidden">
+          <span class="login-badge">PASSWORD RESET</span>
+          <h2 id="resetTitle">ลืมรหัสผ่าน</h2>
+          <p id="resetSubtitle">
+            กรอกอีเมลที่ลงทะเบียนไว้กับระบบ เพื่อรับลิงก์และรหัสยืนยัน 8 หลัก
+          </p>
+
+          <ol class="reset-steps">
+            <li id="resetStepDot1" class="is-active"><span>1</span>อีเมล</li>
+            <li id="resetStepDot2"><span>2</span>รหัสยืนยัน</li>
+            <li id="resetStepDot3"><span>3</span>รหัสผ่านใหม่</li>
+          </ol>
+
+          <div id="resetAlert" class="alert hidden"></div>
+
+          <!-- ขั้นที่ 1 -->
+          <form id="resetStep1" class="reset-form">
+            <label
+              >อีเมล<input
+                id="resetEmail"
+                type="email"
+                autocomplete="email"
+                required
+                placeholder="name@suratcity.go.th" /></label
+            ><button class="v3-primary full" type="submit">ส่งรหัสยืนยัน</button>
+          </form>
+
+          <!-- ขั้นที่ 2 -->
+          <form id="resetStep2" class="reset-form hidden">
+            <label
+              >รหัสยืนยัน 8 หลัก<input
+                id="resetCode"
+                inputmode="numeric"
+                pattern="[0-9]{8}"
+                maxlength="8"
+                autocomplete="one-time-code"
+                required
+                class="reset-code-input"
+                placeholder="00000000" /></label
+            ><p class="reset-hint">รหัสมีอายุ 5 นาที และใช้ได้เพียงครั้งเดียว</p
+            ><button class="v3-primary full" type="submit">ยืนยันรหัส</button>
+            <button id="resetResendButton" class="v3-text-btn" type="button">
+              ขอรหัสใหม่
+            </button>
+          </form>
+
+          <!-- ขั้นที่ 3 -->
+          <form id="resetStep3" class="reset-form hidden">
+            <label
+              >รหัสผ่านใหม่<input
+                id="resetPassword"
+                type="password"
+                autocomplete="new-password"
+                required
+                placeholder="••••••••••••" /></label
+            ><label
+              >ยืนยันรหัสผ่านใหม่<input
+                id="resetPasswordConfirm"
+                type="password"
+                autocomplete="new-password"
+                required
+                placeholder="••••••••••••" /></label
+            >
+            <ul id="resetPasswordRules" class="password-rules"></ul>
+            <button class="v3-primary full" type="submit">บันทึกรหัสผ่านใหม่</button>
+          </form>
+
+          <button id="resetBackToLogin" class="v3-text-btn login-forgot" type="button">
+            ← กลับไปหน้าเข้าสู่ระบบ
+          </button>
         </div>
       </div>
     </section>
@@ -474,15 +550,36 @@
                 <p class="overline">ACCESS CONTROL</p>
                 <h2>ผู้ใช้งานและสิทธิ์</h2>
               </div>
-              <button
-                id="addUserButton"
-                class="v3-primary hidden"
-                data-admin-only
-              >
-                เพิ่มผู้ใช้งาน
+              <div class="user-head-actions">
+                <label class="user-department-filter">
+                  <span>ดูผู้ใช้งานของหน่วยงาน</span>
+                  <select id="userDepartmentFilter">
+                    <option value="">ทุกหน่วยงาน</option>
+                  </select>
+                </label>
+                <button
+                  id="addUserButton"
+                  class="v3-primary hidden"
+                  data-admin-only
+                >
+                  เพิ่มผู้ใช้งาน
+                </button>
+              </div>
+            </div>
+            <div id="userSelectionBar" class="user-selection-bar hidden">
+              <span id="userSelectionCount">เลือกไว้ 0 คน</span>
+              <button id="selectAllUsersButton" class="v3-text-btn" type="button">
+                เลือกทั้งหมด
+              </button>
+              <button id="sendResetCodeButton" class="v3-primary" type="button">
+                ✉ ส่งรหัสยืนยันทางอีเมล
+              </button>
+              <button id="clearUserSelection" class="v3-text-btn" type="button">
+                ล้างการเลือก
               </button>
             </div>
             <div id="userGovernanceTable"></div>
+            <div id="resetCodeResult"></div>
           </section>
           <section id="governanceStaffProfiles" class="governance-panel v3-card hidden">
             <div class="v3-card-head">
@@ -649,6 +746,34 @@
           </button>
           <button id="deleteCategoryConfirmButton" type="button" class="logout-confirm-button">
             ลบหมวดหมู่
+          </button>
+        </div>
+      </div>
+    </dialog>
+    <dialog
+      id="sendResetCodeDialog"
+      class="logout-confirm-dialog"
+      aria-labelledby="sendResetCodeTitle"
+      aria-describedby="sendResetCodeDescription"
+    >
+      <div class="logout-confirm-panel">
+        <div class="logout-confirm-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none">
+            <path d="M3 6h18v12H3z"></path>
+            <path d="M3 6l9 7 9-7"></path>
+          </svg>
+        </div>
+        <h2 id="sendResetCodeTitle">ยืนยันการส่งรหัสยืนยันทางอีเมล</h2>
+        <p id="sendResetCodeDescription">
+          ระบบจะส่งรหัสยืนยัน 8 หลักสำหรับตั้งรหัสผ่านใหม่ไปยังผู้ใช้งานต่อไปนี้
+        </p>
+        <ul id="sendResetCodeList" class="confirm-recipient-list"></ul>
+        <div class="logout-confirm-actions">
+          <button id="sendResetCodeCancelButton" type="button" class="logout-cancel-button">
+            ยกเลิก
+          </button>
+          <button id="sendResetCodeConfirmButton" type="button" class="logout-confirm-button">
+            ยืนยันการส่ง
           </button>
         </div>
       </div>

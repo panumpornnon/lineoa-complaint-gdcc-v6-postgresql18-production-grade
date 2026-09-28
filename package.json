@@ -15,7 +15,8 @@
     "db:export-governance": "node scripts/export-governance-migration.js",
     "db:check-governance": "node scripts/check-governance.js",
     "test": "node --test",
-    "start:server": "node src/server.js"
+    "start:server": "node src/server.js",
+    "mail:test": "node scripts/send-test-mail.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.2",
@@ -26,9 +27,10 @@
     "helmet": "^8.1.0",
     "jsonwebtoken": "^9.0.2",
     "morgan": "^1.10.0",
-    "pg": "^8.16.0",
-    "zod": "^3.25.0",
     "multer": "^2.2.0",
-    "sharp": "^0.35.3"
+    "nodemailer": "^7.0.13",
+    "pg": "^8.16.0",
+    "sharp": "^0.35.3",
+    "zod": "^3.25.0"
   }
 }
