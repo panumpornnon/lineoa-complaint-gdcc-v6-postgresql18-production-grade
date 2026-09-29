@@ -138,8 +138,6 @@ router.post('/login', async (req, res) => {
   });
 });
 
-<<<<<<< HEAD
-=======
 // รับสัญญาณว่าเบราว์เซอร์กำลังปิด ส่งมาด้วย navigator.sendBeacon
 //
 // ต้องวางไว้ก่อน requireAdmin เพราะ sendBeacon ตั้งส่วนหัวของคำขอเองไม่ได้
@@ -543,7 +541,6 @@ router.post('/auth/reset-password', async (req, res) => {
   res.json({ success: true, message: 'ตั้งรหัสผ่านใหม่เรียบร้อย กรุณาเข้าสู่ระบบด้วยรหัสผ่านใหม่' });
 });
 
->>>>>>> dfea9ad59cb57ab9c079418833b0fe8a06a7ce6a
 router.use(requireAdmin);
 
 router.get('/me', (req, res) => {
@@ -2851,8 +2848,6 @@ const TRANSFER_DATASETS = {
                   LEFT JOIN departments d ON d.id = sp.department_id
                  ORDER BY d.code NULLS LAST, sp.full_name`,
   },
-<<<<<<< HEAD
-=======
   // บัญชีผู้ใช้งาน ส่งออกได้โดยไม่มีรหัสผ่านเด็ดขาด
   // คอลัมน์ password ในไฟล์ที่ส่งออกจะว่างเสมอ มีไว้ให้กรอกตอนเพิ่มคนใหม่เท่านั้น
   users: {
@@ -2882,7 +2877,6 @@ const TRANSFER_DATASETS = {
                  WHERE su.role <> 'dev'
                  ORDER BY su.role, su.username`,
   },
->>>>>>> dfea9ad59cb57ab9c079418833b0fe8a06a7ce6a
 };
 
 function getDataset(name) {
@@ -2968,8 +2962,6 @@ async function analyzeImport(datasetName, csvText) {
   } else if (datasetName === 'categories') {
     const rows = await pool.query(`SELECT code FROM complaint_categories`);
     existingByKey = new Map(rows.rows.map((r) => [r.code, r]));
-<<<<<<< HEAD
-=======
   } else if (datasetName === 'users') {
     const rows = await pool.query(
       `SELECT lower(username) AS key, username, role, email FROM staff_users`,
@@ -2978,7 +2970,6 @@ async function analyzeImport(datasetName, csvText) {
     for (const r of rows.rows) {
       if (r.email) emailOwnerByEmail.set(String(r.email).toLowerCase(), r.key);
     }
->>>>>>> dfea9ad59cb57ab9c079418833b0fe8a06a7ce6a
   } else {
     const rows = await pool.query(
       `SELECT sp.full_name, sp.line_id, d.code AS department_code
@@ -3036,8 +3027,6 @@ async function analyzeImport(datasetName, csvText) {
         is_active: isActive,
         sort_order: sortOrder,
       };
-<<<<<<< HEAD
-=======
     } else if (datasetName === 'users') {
       const username = normalizeText(cell(row, 'username'));
       const displayName = normalizeText(cell(row, 'display_name'));
@@ -3116,7 +3105,6 @@ async function analyzeImport(datasetName, csvText) {
         is_active: isActive,
         password,
       };
->>>>>>> dfea9ad59cb57ab9c079418833b0fe8a06a7ce6a
     } else {
       const fullName = normalizeText(cell(row, 'full_name'));
       const positionTitle = normalizeText(cell(row, 'position_title'));
@@ -3281,8 +3269,6 @@ router.post('/governance/import/commit', requireRoles('admin', 'dev'), async (re
              updated_at = current_timestamp`,
           [v.code, v.name_th, v.sla_hours, v.is_active, v.sort_order, v.department_code],
         );
-<<<<<<< HEAD
-=======
       } else if (datasetName === 'users') {
         const isNew = row.action === 'insert';
         // บัญชีใหม่ที่ไม่ได้ระบุรหัสผ่านมา ระบบตั้งให้ชั่วคราวแล้วแสดงครั้งเดียว
@@ -3332,7 +3318,6 @@ router.post('/governance/import/commit', requireRoles('admin', 'dev'), async (re
         if (isNew && !v.password) {
           generatedPasswords.push({ username: v.username, password: plainPassword });
         }
->>>>>>> dfea9ad59cb57ab9c079418833b0fe8a06a7ce6a
       } else {
         // ตัวระบุตัวตนคือ ชื่อ-สกุล + หน่วยงาน เพราะตารางนี้ไม่มีรหัสประจำตัว
         const updated = await client.query(

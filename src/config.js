@@ -56,8 +56,6 @@ const config = {
   jwtSecret: process.env.JWT_SECRET || '',
   jwtExpiresIn: process.env.JWT_EXPIRES_IN || '8h',
 
-<<<<<<< HEAD
-=======
   // เซสชันที่ไม่มีการใช้งานนานเกินจำนวนนาทีนี้จะหมดอายุ ต้องเข้าสู่ระบบใหม่
   // เป็นคนละเรื่องกับ jwtExpiresIn ซึ่งเป็นอายุสูงสุดนับจากตอนเข้าสู่ระบบ
   // เซสชันจะสิ้นสุดเมื่อถึงเงื่อนไขใดเงื่อนไขหนึ่งก่อน
@@ -87,7 +85,6 @@ const config = {
   passwordResetMaxAttempts: 5,
 
 
->>>>>>> dfea9ad59cb57ab9c079418833b0fe8a06a7ce6a
   devBypassLineAuth:
     !isProduction && asBoolean(process.env.DEV_BYPASS_LINE_AUTH, false),
 };
