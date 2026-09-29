@@ -1246,6 +1246,8 @@ router.post(
         oldStatus: previousStatus,
         newStatus: updatedComplaint.status,
         workPhase: nextStatus,
+        // เหตุผลเดียวกับ complaint.status.update ประวัติต้องอยู่กับหน่วยงานที่ทำงานจริง
+        departmentId: updatedComplaint.department_id ?? null,
       },
     );
 
@@ -1361,7 +1363,13 @@ router.patch('/complaints/:id/status', async (req, res) => {
     client.release();
   }
 
-  await writeAudit(req, 'complaint.status.update', 'complaint', complaint.id, { status: complaint.status, note: parsed.data.note });
+  // บันทึกหน่วยงานที่งานสังกัดอยู่ ณ ขณะที่ลงมือ เพื่อให้ประวัติยังอยู่กับหน่วยงานนั้น
+  // แม้ภายหลังงานจะถูกย้ายไปหน่วยงานอื่น
+  await writeAudit(req, 'complaint.status.update', 'complaint', complaint.id, {
+    status: complaint.status,
+    note: parsed.data.note,
+    departmentId: complaint.department_id ?? null,
+  });
 
   await notifyStatusChanged(complaint, parsed.data.note);
 
@@ -1901,6 +1909,32 @@ router.patch(
       ],
     );
 
+    // เก็บ "ชื่อ" หน่วยงานปลายทางไว้ใน audit ด้วย ไม่ใช่เก็บแต่ uuid
+    // เพราะผู้ที่มาอ่านย้อนหลังต้องรู้ทันทีว่ามอบหมายไปหน่วยงานใด
+    // และชื่อ ณ วันที่มอบหมายอาจต่างจากชื่อปัจจุบันหากมีการแก้ไขภายหลัง
+    //
+    // เก็บหน่วยงานเดิมไว้ด้วยเมื่อมีการย้ายหน่วยงาน เพราะหัวหน้าของหน่วยงานเดิม
+    // ต้องยังเห็นในประวัติของตนว่างานถูกย้ายออกไปที่ใด ถ้ากรองด้วยหน่วยงาน
+    // ปัจจุบันของเรื่องอย่างเดียว แถวนี้จะหายไปจากสายตาหน่วยงานเดิมทันทีที่ย้าย
+    const previousDepartmentId = current.department_id;
+    const departmentChanged = previousDepartmentId !== departmentId;
+
+    const departmentNames = new Map();
+    const departmentIdsToName = [departmentId, previousDepartmentId].filter(Boolean);
+    if (departmentIdsToName.length) {
+      const departmentNameResult = await pool.query(
+        `SELECT id, name_th FROM departments WHERE id = ANY($1::uuid[])`,
+        [departmentIdsToName],
+      );
+      for (const row of departmentNameResult.rows) {
+        departmentNames.set(row.id, row.name_th);
+      }
+    }
+
+    const assignedDepartmentName = departmentId
+      ? departmentNames.get(departmentId) ?? null
+      : null;
+
     await writeAudit(
       req,
       'complaint.assignment.update',
@@ -1908,6 +1942,15 @@ router.patch(
       req.params.id,
       {
         departmentId,
+        departmentName: assignedDepartmentName,
+        // บันทึกหน่วยงานเดิมเฉพาะตอนที่ย้ายจริง จะได้ไม่มีบรรทัดส่วนเกิน
+        // ขึ้นมารกในกรณีที่แค่เปลี่ยนเจ้าหน้าที่ภายในหน่วยงานเดียวกัน
+        ...(departmentChanged && previousDepartmentId
+          ? {
+              previousDepartmentId,
+              previousDepartmentName: departmentNames.get(previousDepartmentId) ?? null,
+            }
+          : {}),
         staffProfileId: assignedStaffProfileId,
         staffName: assignedStaffProfile?.full_name ?? null,
         staffPhone: assignedStaffProfile?.phone ?? null,
@@ -2757,19 +2800,49 @@ router.get('/governance/audit-logs', requireRoles('admin','dev','supervisor','ex
         a.detail,
         a.ip_address,
         a.created_at,
-        s.display_name AS actor_name
+        s.display_name AS actor_name,
+        -- สิทธิ์และหน่วยงานของผู้ลงมือ ใช้แสดงใต้ชื่อในหน้า Audit Log
+        -- ระดับผู้บริหารและผู้ดูแลระบบเห็นข้ามหน่วยงาน จึงต้องรู้ว่าใครมาจากที่ใด
+        s.role AS actor_role,
+        sd.name_th AS actor_department_name,
+        -- เลขที่เรื่องและหัวข้อของงานที่ถูกแก้ ใช้ตอบว่า "อัปเดตงานไหน"
+        -- เพราะ entity_id เป็น uuid ซึ่งอ่านแล้วไม่สื่ออะไรกับผู้ใช้
+        c.reference_no AS complaint_reference_no,
+        c.title AS complaint_title,
+        -- ชื่อหน่วยงานที่หามาจาก id ใน detail ใช้กับแถวเก่าที่บันทึกไว้แต่ id
+        -- ก่อนที่ระบบจะเริ่มเก็บชื่อลงไปด้วย ประวัติเดิมจึงอ่านออกย้อนหลังได้
+        ad.name_th AS detail_department_name,
+        pd.name_th AS detail_previous_department_name
      FROM audit_logs a
      LEFT JOIN staff_users s ON s.id = a.actor_staff_user_id
+     LEFT JOIN departments sd ON sd.id = s.department_id
      LEFT JOIN staff_users t
             ON a.entity_type = 'staff_user'
            AND t.id::text = a.entity_id
      LEFT JOIN complaints c
             ON a.entity_type = 'complaint'
-           AND c.id::text = a.entity_id`;
+           AND c.id::text = a.entity_id
+     -- เทียบเป็นข้อความแบบไม่สนตัวพิมพ์ ไม่ใช้การแปลงค่าใน detail เป็น uuid
+     -- เพราะถ้าเจอค่าที่ไม่ใช่ uuid สักแถวเดียว คิวรีจะพังทั้งคำสั่ง
+     LEFT JOIN departments ad
+            ON lower(ad.id::text) = lower(a.detail->>'departmentId')
+     LEFT JOIN departments pd
+            ON lower(pd.id::text) = lower(a.detail->>'previousDepartmentId')`;
 
   const tail = `
      ORDER BY a.created_at DESC
      LIMIT 200`;
+
+  // กิจกรรมที่เกี่ยวกับรหัสผ่านถือเป็นเรื่องความปลอดภัยของบัญชี
+  // ให้เห็นเฉพาะ admin และ dev เท่านั้น ระดับกำกับดูแลไม่ต้องเห็น
+  // ครอบทั้งการขอรหัส การกรอกรหัสผิด การยืนยันสำเร็จ และการที่ผู้ดูแลกดส่งรหัสให้
+  //
+  // สาขา supervisor กรองด้วย entity_type = 'complaint' อยู่แล้ว จึงไม่มีทางติดแถวพวกนี้
+  // แต่ยังคงใส่ไว้ซ้ำ เผื่อวันหนึ่งมีการบันทึกกิจกรรมรหัสผ่านด้วย entity_type อื่น
+  // จะได้ไม่หลุดออกมาโดยไม่มีใครสังเกต
+  const hidePasswordActivity = `
+       AND a.action NOT LIKE 'auth.password_reset%'
+       AND a.action <> 'staff.send_reset_code'`;
 
   // admin และ dev ดูแลระบบทั้งหมด จึงเห็นทุกแถวโดยไม่มีเงื่อนไข
   if (isSystemAdminRole(req.admin.role)) {
@@ -2777,19 +2850,27 @@ router.get('/governance/audit-logs', requireRoles('admin','dev','supervisor','ex
     return res.json({ success: true, data: result.rows });
   }
 
-  // executive และ exclusive เห็นได้ทุกหน่วยงาน แต่ไม่เห็นการกระทำฝั่งผู้ดูแลระบบ
-  // ทั้งกรณีที่ admin/dev เป็นผู้ลงมือ และกรณีที่บัญชี admin/dev เป็นเป้าหมาย
+  // executive และ exclusive เห็นได้ทุกหน่วยงาน แต่เห็นเฉพาะการทำงานของ
+  // officer และ supervisor ซึ่งเป็นผู้ปฏิบัติงานที่ต้องกำกับดูแล
+  //
+  // เขียนเป็นเงื่อนไข "ต้องเป็น officer หรือ supervisor" ไม่ใช่ "ต้องไม่ใช่ admin หรือ dev"
+  // เพราะแบบหลังจะปล่อยผ่านทุกอย่างที่ไม่ใช่สองสิทธิ์นั้น รวมถึงสิทธิ์ใหม่ที่อาจเพิ่ม
+  // ในอนาคต และแถวที่ไม่มีผู้ลงมือ (actor เป็น NULL เช่นการขอรหัสด้วยอีเมล
+  // ที่ไม่มีในระบบ) การระบุรายชื่อที่อนุญาตจึงปลอดภัยกว่าการไล่กันทีละกรณี
   if (isGlobalReadOnlyRole(req.admin.role)) {
     const result = await pool.query(
       `${baseSql}
-     WHERE COALESCE(s.role::text, '') NOT IN ('admin', 'dev')
-       AND COALESCE(t.role::text, '') NOT IN ('admin', 'dev')${tail}`,
+     WHERE s.role::text IN ('officer', 'supervisor')${hidePasswordActivity}${tail}`,
     );
     return res.json({ success: true, data: result.rows });
   }
 
-  // supervisor เห็นเฉพาะหน่วยงานตัวเอง ทั้งแถวที่ผูกกับเรื่องร้องเรียนของหน่วยงาน
-  // และแถวที่เกี่ยวกับเจ้าหน้าที่ในหน่วยงานเดียวกัน (เช่น การขอรหัสเพราะลืมรหัสผ่าน)
+  // supervisor คือหัวหน้างานในหน่วยงานหนึ่ง จึงเห็นเฉพาะงานของหน่วยงานตัวเอง
+  // และเห็นเฉพาะความเคลื่อนไหวของเรื่องร้องเรียน ได้แก่ การอัปเดตสถานะ
+  // การอัปเดตความคืบหน้า และการมอบหมายงาน ซึ่งเป็นสิ่งที่ต้องใช้กำกับทีม
+  //
+  // ไม่เห็นแถวประเภท staff_user เลย จึงไม่เห็นกิจกรรมเรื่องรหัสผ่าน
+  // การเพิ่มหรือแก้ไขบัญชี และไม่เห็นการตั้งค่าระบบอย่างหมวดหมู่หรือหน่วยงาน
   const departmentId = getAdminDepartmentId(req);
   if (!departmentId) {
     throw new ApiError(403, 'บัญชีนี้ยังไม่ได้กำหนดหน่วยงาน');
@@ -2797,12 +2878,21 @@ router.get('/governance/audit-logs', requireRoles('admin','dev','supervisor','ex
 
   const result = await pool.query(
     `${baseSql}
-     WHERE COALESCE(s.role::text, '') NOT IN ('admin', 'dev')
-       AND COALESCE(t.role::text, '') NOT IN ('admin', 'dev')
+     WHERE a.entity_type = 'complaint'
+       AND s.role::text IN ('officer', 'supervisor')
+       -- นับสี่ทาง เพื่อให้ประวัติไม่หายไปเมื่องานถูกย้ายหน่วยงาน
+       --   1. งานอยู่ที่หน่วยงานนี้ในปัจจุบัน
+       --   2. ผู้ลงมือสังกัดหน่วยงานนี้ คือหน่วยงานนี้เป็นคนทำงานนั้นจริง
+       --      ข้อนี้สำคัญที่สุด เพราะใช้ได้กับแถวเก่าที่บันทึกไว้ก่อนระบบจะเก็บ
+       --      หน่วยงานลงใน detail จึงกู้ประวัติที่เคยหายไปกลับมาได้ทั้งหมด
+       --   3. แถวนั้นบันทึกไว้ว่าตอนลงมือ งานสังกัดหน่วยงานนี้
+       --   4. แถวนั้นเป็นการย้ายงานออกจากหน่วยงานนี้ไปที่อื่น
        AND (
-             (a.entity_type = 'complaint' AND c.department_id = $1)
-          OR (a.entity_type = 'staff_user' AND (s.department_id = $1 OR t.department_id = $1))
-       )${tail}`,
+             c.department_id = $1
+          OR s.department_id = $1
+          OR lower(a.detail->>'departmentId') = lower($1::uuid::text)
+          OR lower(a.detail->>'previousDepartmentId') = lower($1::uuid::text)
+       )${hidePasswordActivity}${tail}`,
     [departmentId],
   );
 
