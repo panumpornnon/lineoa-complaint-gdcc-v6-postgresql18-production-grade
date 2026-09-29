@@ -1348,7 +1348,77 @@ const auditActionLabels = {
   "auth.password_reset_code_verified": "ยืนยันรหัสสำเร็จ",
   "auth.password_reset": "ตั้งรหัสผ่านใหม่สำเร็จ",
   "staff.send_reset_code": "ผู้ดูแลส่งรหัสยืนยันทางอีเมล",
+  "complaint.status.update": "อัปเดตสถานะเรื่อง",
+  "complaint.work_progress.update": "อัปเดตความคืบหน้างาน",
+  "complaint.assignment.update": "มอบหมายงาน",
+  "complaint.delete": "ลบเรื่องร้องเรียน",
+  "auth.login": "เข้าสู่ระบบ",
+  "auth.logout": "ออกจากระบบ",
+  "category.create": "เพิ่มหมวดหมู่",
+  "category.update": "แก้ไขหมวดหมู่",
+  "department.create": "เพิ่มหน่วยงาน",
+  "department.update": "แก้ไขหน่วยงาน",
+  "staff.create": "เพิ่มผู้ใช้งาน",
+  "staff.update": "แก้ไขผู้ใช้งาน",
+  "staff.delete": "ลบผู้ใช้งาน",
+  "staff_profile.create": "เพิ่มข้อมูลเจ้าหน้าที่",
+  "staff_profile.update": "แก้ไขข้อมูลเจ้าหน้าที่",
+  "report.export.csv": "ส่งออกรายงาน CSV",
+  "governance.export.csv": "ส่งออกข้อมูลหลังบ้าน CSV",
+  "governance.import.csv": "นำเข้าข้อมูลหลังบ้าน CSV",
 };
+
+// รายละเอียดที่ยอมให้แสดงของแต่ละกิจกรรม เรียงตามลำดับที่อยากให้อ่าน
+// คีย์ที่ไม่อยู่ในรายการนี้จะไม่แสดง เช่น workPhase หรือ imageCount
+// ซึ่งเป็นค่าที่ระบบใช้ภายใน ไม่ได้ช่วยให้หัวหน้างานเข้าใจอะไรเพิ่ม
+// กิจกรรมที่ไม่ได้ระบุไว้จะแสดงทุกคีย์ตามเดิม ข้อมูลจึงไม่หายไปโดยไม่ตั้งใจ
+const auditDetailVisibleFields = {
+  "complaint.status.update": ["oldStatus", "newStatus", "note"],
+  "complaint.work_progress.update": ["oldStatus", "newStatus", "note"],
+  // previousDepartmentName จะมีก็ต่อเมื่อมีการย้ายหน่วยงานจริง
+  // กรณีเปลี่ยนแค่เจ้าหน้าที่ภายในหน่วยงานเดิม บรรทัดนี้จะไม่ขึ้นมารก
+  "complaint.assignment.update": [
+    "previousDepartmentName",
+    "departmentName",
+    "staffName",
+    "note",
+  ],
+};
+
+// ชื่อภาษาไทยของคีย์ที่พบบ่อยในช่องรายละเอียด เพื่อไม่ให้ผู้ใช้ต้องอ่าน JSON ดิบ
+const auditDetailFieldLabels = {
+  oldStatus: "สถานะเดิม",
+  newStatus: "สถานะใหม่",
+  departmentName: "มอบหมายให้หน่วยงาน",
+  previousDepartmentName: "ย้ายมาจากหน่วยงาน",
+  staffName: "เจ้าหน้าที่ผู้รับผิดชอบ",
+  priority: "ระดับความเร่งด่วน",
+  note: "หมายเหตุ",
+  username: "ชื่อผู้ใช้",
+  displayName: "ชื่อแสดงผล",
+  role: "สิทธิ์",
+  email: "อีเมล",
+  dataset: "ชุดข้อมูล",
+  inserted: "เพิ่มใหม่",
+  updated: "แก้ไข",
+  rows: "จำนวนแถว",
+  requested: "จำนวนที่ขอ",
+  sent: "ส่งสำเร็จ",
+  channel: "ช่องทาง",
+  mail_sent: "ส่งอีเมลสำเร็จ",
+  attempts_left: "โอกาสที่เหลือ",
+  attempts_used: "กรอกผิดไปแล้ว",
+};
+
+// แปลงค่าให้อ่านออก สถานะแปลงเป็นภาษาไทย ค่าจริง/เท็จแปลงเป็นใช่/ไม่ใช่
+function auditDetailValue(key, value) {
+  if (value === null || value === undefined || value === "") return "-";
+  if (typeof value === "boolean") return value ? "ใช่" : "ไม่ใช่";
+  if (key === "oldStatus" || key === "newStatus")
+    return statusLabels[value] || String(value);
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+}
 
 function auditActionHtml(action) {
   const label = auditActionLabels[action];
@@ -1367,21 +1437,87 @@ function auditNoteHtml(detail) {
     ? `<div class="audit-delete-note">${escapeHtml(deletionReason)}</div>`
     : '<span class="muted">-</span>';
 }
-function auditDetailHtml(detail) {
-  const value = parseAuditDetail(detail);
+// คีย์ที่ต้องแสดงเสมอเมื่อกิจกรรมนั้นเกิดขึ้น แม้ในแถวเก่าจะยังไม่มีค่า
+// จะได้ไม่เกิดกรณีที่ผู้ใช้มองหา "มอบหมายให้หน่วยงาน" แล้วไม่เจอบรรทัดนั้นเลย
+// จนเข้าใจผิดว่าระบบไม่ได้บันทึก ในกรณีนั้นจะขึ้นเป็นขีดแทน
+const auditDetailAlwaysShow = new Set([
+  "departmentName",
+  "staffName",
+  "note",
+  "oldStatus",
+  "newStatus",
+]);
+
+function auditDetailHtml(row) {
+  const action = row.action || "";
+  const value = parseAuditDetail(row.detail);
   const remaining = { ...value };
   delete remaining.deletionReason;
-  if (!Object.keys(remaining).length) return '<span class="muted">-</span>';
 
-  const compact = JSON.stringify(remaining);
-  // สั้นพอที่จะอ่านจบในบรรทัดเดียว ไม่ต้องมีปุ่ม
-  if (compact.length <= 60) {
-    return `<div class="audit-detail">${escapeHtml(compact)}</div>`;
+  // แถวเก่าบันทึกไว้แต่ id ของหน่วยงาน ไม่ได้บันทึกชื่อ
+  // ฝั่งเซิร์ฟเวอร์หาชื่อมาให้แล้ว จึงเติมกลับเข้าไปเพื่อให้อ่านออกเหมือนแถวใหม่
+  if (!remaining.departmentName && row.detail_department_name) {
+    remaining.departmentName = row.detail_department_name;
+  }
+  if (
+    !remaining.previousDepartmentName &&
+    row.detail_previous_department_name
+  ) {
+    remaining.previousDepartmentName = row.detail_previous_department_name;
   }
 
-  // ยาวเกิน แสดงย่อพร้อมปุ่มกางดูฉบับเต็มแบบจัดรูปแบบ
-  const pretty = JSON.stringify(remaining, null, 2);
-  return `<details class="audit-detail-box"><summary><span class="audit-detail-preview">${escapeHtml(compact)}</span><span class="audit-detail-toggle"></span></summary><pre class="audit-detail-full">${escapeHtml(pretty)}</pre></details>`;
+  // กิจกรรมที่กำหนดรายการไว้ ให้แสดงเฉพาะที่กำหนดและเรียงตามนั้น
+  const allowed = auditDetailVisibleFields[action];
+  const keys = allowed
+    ? allowed.filter(
+        (k) => Object.hasOwn(remaining, k) || auditDetailAlwaysShow.has(k),
+      )
+    : Object.keys(remaining);
+  if (!keys.length) return '<span class="muted">-</span>';
+
+  // แปลงเป็นคู่ "หัวข้อ : ค่า" ภาษาไทย แทนการโยน JSON ดิบใส่หน้าผู้ใช้
+  // คีย์ที่ยังไม่มีคำแปลจะแสดงชื่อเดิมไว้ก่อน จะได้ไม่มีข้อมูลหายไปเงียบๆ
+  const rows = keys
+    .map(
+      (k) =>
+        `<div class="audit-detail-row"><span>${escapeHtml(auditDetailFieldLabels[k] || k)}</span><b>${escapeHtml(auditDetailValue(k, remaining[k]))}</b></div>`,
+    )
+    .join("");
+
+  // รายการที่คัดมาแล้วสั้นพอ แสดงเต็มได้เลยไม่ต้องมีปุ่มกาง
+  if (keys.length <= 4) return `<div class="audit-detail">${rows}</div>`;
+
+  // ยาวเกินกว่าจะแสดงหมดในตาราง เก็บไว้หลังปุ่มกาง
+  return `<details class="audit-detail-box"><summary><span class="audit-detail-preview">${escapeHtml(`${keys.length} รายการ`)}</span><span class="audit-detail-toggle"></span></summary><div class="audit-detail">${rows}</div></details>`;
+}
+
+// ชื่อผู้ลงมือ พร้อมหน่วยงานต้นสังกัดเป็นบรรทัดรอง
+//
+// แสดงหน่วยงานเฉพาะผู้ที่ดูข้ามหน่วยงานได้ คือ admin, dev และระดับผู้บริหาร
+// ส่วน supervisor เห็นเฉพาะหน่วยงานตัวเองอยู่แล้ว บรรทัดนี้จึงซ้ำกันทุกแถวและรกเปล่าๆ
+function auditActorHtml(row) {
+  const name = escapeHtml(row.actor_name || "ระบบ");
+  if (!(isSystemAdmin() || isExecutive())) return name;
+  if (!row.actor_name) return name;
+
+  // สิทธิ์ระดับบริหารและผู้ดูแลระบบไม่ได้สังกัดหน่วยงานใดหน่วยงานหนึ่ง
+  const department =
+    row.actor_department_name ||
+    (["admin", "dev", "executive", "exclusive"].includes(row.actor_role)
+      ? "ทุกหน่วยงาน"
+      : "ยังไม่ได้กำหนดหน่วยงาน");
+
+  return `${name}<div class="audit-actor-department">${escapeHtml(department)}</div>`;
+}
+
+// แสดงว่าแถวนี้เกี่ยวกับงานใด ใช้เลขที่เรื่องเป็นหลักเพราะเป็นสิ่งที่เจ้าหน้าที่ใช้อ้างอิงกันจริง
+function auditTargetHtml(row) {
+  if (!row.complaint_reference_no) return '<span class="muted">-</span>';
+  return `<div class="case-ref">${escapeHtml(row.complaint_reference_no)}</div>${
+    row.complaint_title
+      ? `<div class="audit-target-title">${escapeHtml(row.complaint_title)}</div>`
+      : ""
+  }`;
 }
 function setGovernanceTab(mode) {
   governanceMode = mode;
@@ -1597,13 +1733,13 @@ async function loadGovernance(mode = "categories") {
           "วันเวลา",
           "ผู้ดำเนินการ",
           "กิจกรรม",
-          "ประเภท",
+          "เรื่องที่เกี่ยวข้อง",
           "หมายเหตุ",
           "รายละเอียด",
         ],
         r.data.map(
           (x) =>
-            `<tr><td>${fmt(x.created_at)}</td><td>${escapeHtml(x.actor_name || "ระบบ")}</td><td class="case-ref">${auditActionHtml(x.action)}</td><td>${escapeHtml(x.entity_type)}</td><td>${auditNoteHtml(x.detail)}</td><td>${auditDetailHtml(x.detail)}</td></tr>`,
+            `<tr><td>${fmt(x.created_at)}</td><td>${auditActorHtml(x)}</td><td>${auditActionHtml(x.action)}</td><td>${auditTargetHtml(x)}</td><td>${auditNoteHtml(x.detail)}</td><td>${auditDetailHtml(x)}</td></tr>`,
         ),
       );
     }
