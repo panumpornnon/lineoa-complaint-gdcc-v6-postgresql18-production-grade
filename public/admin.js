@@ -70,11 +70,7 @@ async function api(path, opt = {}) {
   if (token) h.set("authorization", `Bearer ${token}`);
   const r = await fetch(path, { ...opt, headers: h });
   const j = await r.json().catch(() => ({}));
-  if (r.status === 401 && path != "/api/admin/login") {
-    // ส่งเหตุผลไปแสดงที่หน้าเข้าสู่ระบบ เช่นถูกเข้าสู่ระบบจากเครื่องอื่น
-    // หรือบัญชีถูกปิดใช้งาน จะได้ไม่เห็นแค่หน้าล็อกอินเปล่าๆ โดยไม่รู้สาเหตุ
-    logout(j.sessionReason ? j.message : "");
-  }
+  if (r.status === 401 && path != "/api/admin/login") logout();
   if (!r.ok) throw new Error(j.message || `เกิดข้อผิดพลาด ${r.status}`);
   return j;
 }
@@ -200,13 +196,11 @@ function appView(user) {
   $("#userStatusCard").classList.toggle("hidden", !showUserInsights);
   $("#topUserDepartmentsCard").classList.toggle("hidden", !showUserInsights);
 }
-function logout(reasonMessage = "") {
+function logout() {
   token = null;
   executiveDepartmentId = "";
   sessionStorage.removeItem("adminToken");
   loginView();
-  if (reasonMessage) show("#adminAlert", reasonMessage);
-  else clear("#adminAlert");
 }
 function openLogoutConfirmation() {
   const dialog = $("#logoutConfirmDialog");
@@ -216,18 +210,8 @@ function closeLogoutConfirmation() {
   const dialog = $("#logoutConfirmDialog");
   if (dialog.open) dialog.close("cancel");
 }
-async function confirmLogout() {
+function confirmLogout() {
   closeLogoutConfirmation();
-
-  // ต้องแจ้งเซิร์ฟเวอร์ให้ยกเลิกเซสชันจริง ไม่ใช่แค่ลบ token ทิ้งจากเบราว์เซอร์
-  // เพราะระบบอนุญาตให้ใช้งานได้ครั้งละหนึ่งเครื่อง ถ้าเซสชันเดิมยังค้างอยู่
-  // เจ้าตัวจะเข้าสู่ระบบใหม่ไม่ได้จนกว่าเซสชันนั้นจะหมดอายุ
-  try {
-    await api("/api/admin/logout", { method: "POST" });
-  } catch {
-    // ต่อเซิร์ฟเวอร์ไม่ได้ก็ยังต้องออกจากระบบฝั่งเบราว์เซอร์ให้สำเร็จ
-  }
-
   logout();
 }
 async function loadMe() {
@@ -237,9 +221,7 @@ async function loadMe() {
     appView(r.data);
     await boot();
   } catch {
-    // api() เรียก logout พร้อมเหตุผลไปแล้วถ้าเป็นกรณีเซสชันสิ้นสุด
-    // ตรงนี้จึงไม่เรียกซ้ำ เพื่อไม่ให้ข้อความที่เพิ่งแสดงถูกล้างทิ้ง
-    if (token) logout();
+    logout();
   }
 }
 function switchView(name) {
@@ -337,11 +319,10 @@ function applyRoleVisibility() {
   const isElevated =
     isSystemAdmin() || currentUser?.role === "supervisor" || isExecutive();
   const isAdmin = isSystemAdmin();
-  // admin เป็นตำแหน่งรองจาก dev และมีสิทธิ์จัดการทำเนียบเจ้าหน้าที่เท่ากัน
-  const canManageStaffProfiles = isSystemAdmin();
+  const isDev = currentUser?.role === "dev";
   if (
     (!isAdmin && governanceMode === "users") ||
-    (!canManageStaffProfiles && governanceMode === "staffProfiles")
+    (!isDev && governanceMode === "staffProfiles")
   )
     governanceMode = "categories";
 
@@ -359,13 +340,13 @@ function applyRoleVisibility() {
     ?.classList.toggle("hidden", !isAdmin);
   document
     .querySelector('.governance-tab[data-governance="staffProfiles"]')
-    ?.classList.toggle("hidden", !canManageStaffProfiles);
+    ?.classList.toggle("hidden", !isDev);
 
   // เฉพาะ Admin เพิ่ม/แก้ไขหมวดหมู่ หน่วยงาน และผู้ใช้งาน
   $("#addCategoryButton")?.classList.toggle("hidden", !isAdmin);
   $("#addDepartmentButton")?.classList.toggle("hidden", !isAdmin);
   $("#addUserButton")?.classList.toggle("hidden", !isAdmin);
-  $("#addStaffProfileButton")?.classList.toggle("hidden", !canManageStaffProfiles);
+  $("#addStaffProfileButton")?.classList.toggle("hidden", !isDev);
   document
     .querySelectorAll("[data-admin-only]")
     .forEach((el) => el.classList.toggle("hidden", !isAdmin));
@@ -1485,8 +1466,8 @@ async function loadGovernance(mode = "categories") {
         );
     }
     if (mode === "staffProfiles") {
-      if (!isSystemAdmin()) {
-        throw new Error("เฉพาะ Admin และ DEV เท่านั้นที่ดูข้อมูลเจ้าหน้าที่ได้");
+      if (currentUser?.role !== "dev") {
+        throw new Error("เฉพาะ DEV เท่านั้นที่ดูข้อมูลเจ้าหน้าที่ได้");
       }
       const params = new URLSearchParams();
       if (staffProfileDepartmentId)
@@ -1594,8 +1575,8 @@ function staffProfileDepartmentField(data = null) {
   return `<label>หน่วยงานต้นสังกัด<select id="staffProfileDepartment" name="departmentId" required>${options}</select><small id="staffProfileDepartmentPreview" class="muted">${selectedDepartment ? `หน่วยงานที่เลือก: ${escapeHtml(selectedDepartment.name_th)}` : "กรุณาเลือกหน่วยงานของเจ้าหน้าที่"}</small></label>`;
 }
 function openGovernanceDialog(type, data = null) {
-  if (type === "staffProfile" && !isSystemAdmin()) {
-    show("#pageAlert", "เฉพาะ Admin และ DEV เท่านั้นที่จัดการข้อมูลเจ้าหน้าที่ได้");
+  if (type === "staffProfile" && currentUser?.role !== "dev") {
+    show("#pageAlert", "เฉพาะ DEV เท่านั้นที่จัดการข้อมูลเจ้าหน้าที่ได้");
     return;
   }
   if (
@@ -1748,8 +1729,11 @@ function openGovernanceDialog(type, data = null) {
   $("#governanceDialog").showModal();
 }
 async function saveGovernance() {
-  if (governanceEditing?.type === "staffProfile" && !isSystemAdmin()) {
-    throw new Error("เฉพาะ Admin และ DEV เท่านั้นที่จัดการข้อมูลเจ้าหน้าที่ได้");
+  if (
+    governanceEditing?.type === "staffProfile" &&
+    currentUser?.role !== "dev"
+  ) {
+    throw new Error("เฉพาะ DEV เท่านั้นที่จัดการข้อมูลเจ้าหน้าที่ได้");
   }
   if (
     ["department", "category", "user"].includes(governanceEditing?.type) &&
@@ -2010,7 +1994,7 @@ function closeGovernanceDialog() {
 }
 
 $("#addStaffProfileButton").onclick = () => {
-  if (isSystemAdmin()) openGovernanceDialog("staffProfile");
+  if (currentUser?.role === "dev") openGovernanceDialog("staffProfile");
 };
 const lockedGovernanceDialog = $("#governanceDialog");
 lockedGovernanceDialog.addEventListener(
@@ -2067,31 +2051,6 @@ $("#logoutButton").onclick = openLogoutConfirmation;
 $("#mobileLogoutButton").onclick = openLogoutConfirmation;
 $("#logoutCancelButton").onclick = closeLogoutConfirmation;
 $("#logoutConfirmButton").onclick = confirmLogout;
-
-// แจ้งเซิร์ฟเวอร์เมื่อหน้าจอกำลังถูกปิด เพื่อให้บัญชีว่างลงภายในไม่กี่วินาที
-// แทนที่จะต้องรอครบเกณฑ์ไม่มีความเคลื่อนไหวหกสิบนาที
-//
-// ใช้ pagehide ไม่ใช่ beforeunload หรือ unload เพราะเป็นเหตุการณ์เดียวที่
-// เบราว์เซอร์สมัยใหม่รับประกันว่าจะยิงทั้งบนเดสก์ท็อปและมือถือ
-//
-// ใช้ sendBeacon เพราะ fetch ปกติจะถูกยกเลิกกลางคันเมื่อหน้าจอถูกทำลาย
-// ข้อจำกัดของ sendBeacon คือตั้งส่วนหัวของคำขอเองไม่ได้ จึงแนบ token ไปในเนื้อคำขอแทน
-//
-// เหตุการณ์นี้เกิดตอนกดรีเฟรชด้วย เซิร์ฟเวอร์จึงเพียงทำเครื่องหมายไว้ ไม่ได้ยกเลิกทันที
-// ถ้าเป็นการรีเฟรช คำขอแรกหลังโหลดเสร็จจะล้างเครื่องหมายให้เอง
-window.addEventListener("pagehide", (event) => {
-  // persisted = true คือหน้าถูกพักไว้ในแคชเพื่อกดย้อนกลับ ยังไม่ได้ปิดจริง
-  if (event.persisted || !token) return;
-
-  try {
-    navigator.sendBeacon(
-      "/api/admin/session/closing",
-      new Blob([JSON.stringify({ token })], { type: "application/json" }),
-    );
-  } catch {
-    // เบราว์เซอร์เก่าที่ไม่มี sendBeacon จะตกไปใช้เกณฑ์หกสิบนาทีตามเดิม
-  }
-});
 logoutConfirmDialog.addEventListener("cancel", (e) => {
   e.preventDefault();
   closeLogoutConfirmation();
@@ -2193,7 +2152,6 @@ const transferDatasetLabels = {
   departments: "หน่วยงาน",
   categories: "หมวดหมู่และ SLA",
   staffProfiles: "ข้อมูลเจ้าหน้าที่",
-  users: "บัญชีผู้ใช้งาน",
 };
 const transferActionLabels = {
   insert: "เพิ่มใหม่",
@@ -2258,8 +2216,9 @@ function transferPreviewHtml(plan) {
     const cells = columns
       .map((name) => `<td>${escapeHtml(row.values[name] ?? "-")}</td>`)
       .join("");
-    const messages = [...row.problems, ...(row.notes ?? [])];
-    const note = messages.length ? escapeHtml(messages.join(" / ")) : "-";
+    const note = row.problems.length
+      ? escapeHtml(row.problems.join(" / "))
+      : "-";
     return `<tr class="transfer-row-${row.action}"><td>${row.line}</td><td><span class="transfer-chip ${row.action}">${transferActionLabels[row.action]}</span></td>${cells}<td>${note}</td></tr>`;
   });
 
@@ -2268,10 +2227,7 @@ function transferPreviewHtml(plan) {
 
   return `
     <div class="transfer-preview-head">
-      <div>
-        <p class="transfer-detected">ตรวจพบว่าเป็นไฟล์ของชุด <b>${escapeHtml(plan.label)}</b></p>
-        <h3>ตัวอย่างการนำเข้าทั้งหมด ${plan.total} แถว</h3>
-      </div>
+      <h3>ตัวอย่างการนำเข้า ${escapeHtml(plan.label)} ทั้งหมด ${plan.total} แถว</h3>
       <div class="transfer-chips">${chips}</div>
     </div>
     ${
@@ -2290,6 +2246,7 @@ function transferPreviewHtml(plan) {
 }
 
 async function previewGovernanceImport() {
+  const dataset = transferSelectedDataset();
   const input = $("#transferFile");
   const file = input?.files?.[0];
   clear("#transferAlert");
@@ -2313,11 +2270,10 @@ async function previewGovernanceImport() {
     const csv = await file.text();
     const r = await api("/api/admin/governance/import/preview", {
       method: "POST",
-      body: JSON.stringify({ csv }),
+      body: JSON.stringify({ dataset, csv }),
     });
     transferPendingCsv = csv;
-    // ชุดข้อมูลมาจากการตรวจจับหัวตารางฝั่งเซิร์ฟเวอร์ ไม่ใช่จากดรอปดาวน์
-    transferPendingDataset = r.data.dataset;
+    transferPendingDataset = dataset;
     $("#transferPreview").innerHTML = transferPreviewHtml(r.data);
     $("#transferConfirmButton").onclick = () => confirmGovernanceImport();
     $("#transferCancelButton").onclick = () => resetTransferPanel();
@@ -2341,35 +2297,16 @@ async function confirmGovernanceImport() {
     const r = await api("/api/admin/governance/import/commit", {
       method: "POST",
       body: JSON.stringify({
+        dataset: transferPendingDataset,
         csv: transferPendingCsv,
-        expectedDataset: transferPendingDataset,
       }),
     });
-    const generated = r.data.generatedPasswords ?? [];
     resetTransferPanel();
     show(
       "#transferAlert",
       `นำเข้า ${r.data.label} สำเร็จ เพิ่มใหม่ ${r.data.inserted} รายการ อัปเดต ${r.data.updated} รายการ`,
       "success",
     );
-    // รหัสผ่านชั่วคราวแสดงได้ครั้งเดียว ระบบไม่ได้เก็บไว้ที่ใดและเรียกดูย้อนหลังไม่ได้
-    if (generated.length) {
-      $("#transferPreview").innerHTML = `
-        <div class="transfer-password-box">
-          <h3>รหัสผ่านชั่วคราวของบัญชีใหม่ ${generated.length} รายการ</h3>
-          <p>
-            แสดงเพียงครั้งเดียวเท่านั้น ระบบไม่ได้เก็บไว้และเรียกดูย้อนหลังไม่ได้
-            กรุณาคัดลอกส่งให้เจ้าของบัญชีทันที แล้วให้เปลี่ยนรหัสผ่านเมื่อเข้าใช้งานครั้งแรก
-          </p>
-          ${governanceTable(
-            ["ชื่อผู้ใช้", "รหัสผ่านชั่วคราว"],
-            generated.map(
-              (g) =>
-                `<tr><td class="case-ref">${escapeHtml(g.username)}</td><td class="temp-password">${escapeHtml(g.password)}</td></tr>`,
-            ),
-          )}
-        </div>`;
-    }
     // โหลดรายการหน่วยงานใหม่ เพราะดรอปดาวน์ในหน้าจออื่นอ้างอิงค่าชุดนี้
     try {
       const dep = await api("/api/admin/departments");

@@ -25,9 +25,7 @@ export function errorHandler(error, req, res, next) {
   }
 
   if (error instanceof ApiError) {
-    // sessionReason บอกหน้าเว็บว่าเซสชันสิ้นสุดเพราะอะไร เช่นถูกแทนที่ด้วยการ
-    // เข้าสู่ระบบจากเครื่องอื่น หรือบัญชีถูกปิดใช้งาน จะได้แสดงข้อความให้ตรงเหตุ
-    return res.status(error.status).json({ success: false, message: error.message, ...(error.details ? { details: error.details } : {}), ...(error.sessionReason ? { sessionReason: error.sessionReason } : {}), requestId: req.requestId });
+    return res.status(error.status).json({ success: false, message: error.message, ...(error.details ? { details: error.details } : {}), requestId: req.requestId });
   }
 
   if (error?.code === '23505') {
