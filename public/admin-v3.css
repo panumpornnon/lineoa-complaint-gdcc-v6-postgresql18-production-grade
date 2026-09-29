@@ -2677,3 +2677,349 @@ a.map-link-button:visited{
     flex: 1;
   }
 }
+<<<<<<< HEAD
+=======
+
+/* ===== แจ้งเตือนระดับเตือน (20260924-single-session-1) =====
+   styles.css มีแค่ .alert (แดง = ข้อผิดพลาด) กับ .alert.success (เขียว)
+   ข้อความอย่าง "ระบบได้ออกจากระบบให้เครื่องอื่นแล้ว" ไม่ใช่ข้อผิดพลาด
+   แต่ก็ไม่ใช่เรื่องสำเร็จ จึงเพิ่มระดับกลางเป็นสีเหลืองอำพัน */
+.alert.warning {
+  border-color: #f0d9a4;
+  background: #fdf6e6;
+  color: #8a6212;
+}
+
+/* ===== รหัสผ่านชั่วคราวหลังนำเข้าบัญชีผู้ใช้งาน (20260924-user-transfer-1) ===== */
+.transfer-password-box {
+  margin-top: 18px;
+  padding: 18px;
+  border: 1px solid #f0d9a4;
+  border-radius: 16px;
+  background: #fdf9ef;
+}
+.transfer-password-box h3 {
+  margin: 0 0 6px;
+  font-size: 1rem;
+  color: #8a6212;
+}
+.transfer-password-box p {
+  margin: 0 0 12px;
+  color: #7d6534;
+  font-size: 0.85rem;
+  line-height: 1.6;
+}
+.temp-password {
+  font-family: "Cascadia Mono", Consolas, "Courier New", monospace;
+  font-size: 0.95rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  -webkit-user-select: all;
+  user-select: all;
+}
+
+/* ===== ป้ายบอกชุดข้อมูลที่ตรวจพบจากไฟล์ (20260924-user-transfer-2) ===== */
+.transfer-detected {
+  margin: 0 0 2px;
+  color: #6b6480;
+  font-size: 0.82rem;
+}
+.transfer-detected b {
+  color: #5b3fa8;
+}
+
+/* ===== ตั้งรหัสผ่านใหม่ และการเลือกผู้ใช้งาน (20260928-password-reset-1) ===== */
+.login-forgot {
+  display: block;
+  width: 100%;
+  margin-top: 0.8rem;
+  padding: 0.4rem;
+  text-align: center;
+}
+.reset-steps {
+  display: flex;
+  gap: 0.4rem;
+  margin: 1.2rem 0 0.4rem;
+  padding: 0;
+  list-style: none;
+}
+.reset-steps li {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+.reset-steps span {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+  border-radius: 50%;
+  background: #eef3f1;
+}
+.reset-steps li.is-active {
+  color: var(--green);
+}
+.reset-steps li.is-active span {
+  color: #fff;
+  background: var(--green);
+}
+.reset-steps li.is-done span {
+  color: #fff;
+  background: #7fc7b5;
+}
+.reset-form {
+  display: grid;
+  gap: 1rem;
+  margin-top: 1rem;
+}
+.reset-form label {
+  display: grid;
+  gap: 0.45rem;
+  font-weight: 800;
+}
+.reset-form input {
+  width: 100%;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: #fbfdfc;
+}
+.reset-code-input {
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 1.5rem;
+  font-weight: 800;
+  letter-spacing: 0.45em;
+  text-align: center;
+}
+.password-rules {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0;
+  padding: 0.8rem 1rem;
+  border-radius: 13px;
+  background: #f6f9f8;
+  list-style: none;
+  font-size: 0.8rem;
+}
+.password-rules .is-ok {
+  color: #13724e;
+  font-weight: 700;
+}
+.password-rules .is-pending {
+  color: var(--muted);
+}
+.user-head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.7rem;
+  align-items: flex-end;
+}
+.user-department-filter {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--muted);
+}
+.user-department-filter select {
+  min-width: 230px;
+  padding: 0.6rem 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+  color: var(--ink);
+  font-weight: 600;
+}
+.user-selection-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.7rem;
+  align-items: center;
+  margin: 0.9rem 0;
+  padding: 0.7rem 1rem;
+  border: 1px solid #cfe4de;
+  border-radius: 14px;
+  background: #eef6f3;
+  font-weight: 800;
+}
+.user-selection-bar span {
+  margin-right: auto;
+  color: var(--green);
+}
+.reset-result-box {
+  margin-top: 1.1rem;
+  padding: 1.1rem;
+  border: 1px solid #f0d9a4;
+  border-radius: 16px;
+  background: #fdf9ef;
+}
+.reset-result-box h3 {
+  margin: 0 0 0.4rem;
+  font-size: 1rem;
+  color: #8a6212;
+}
+.reset-result-box p {
+  margin: 0 0 0.9rem;
+  color: #7d6534;
+  font-size: 0.85rem;
+  line-height: 1.6;
+}
+.reset-status {
+  display: inline-block;
+  padding: 0.25rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 800;
+}
+.reset-status.is-ok {
+  background: #dcf6ea;
+  color: #13744e;
+}
+.reset-status.is-warn {
+  background: #fbe3e3;
+  color: #a42c2c;
+}
+@media (max-width: 640px) {
+  .user-head-actions,
+  .user-department-filter select {
+    width: 100%;
+  }
+}
+
+/* ---- เลือกผู้ใช้งานหลายคนเพื่อส่งรหัสยืนยันทางอีเมล ---- */
+.select-all-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.select-all-head span {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.confirm-recipient-list {
+  list-style: none;
+  margin: 12px 0 4px;
+  padding: 0;
+  max-height: 240px;
+  overflow-y: auto;
+  text-align: left;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 10px;
+}
+
+.confirm-recipient-list li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 12px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.22);
+}
+
+.confirm-recipient-list li:last-child {
+  border-bottom: none;
+}
+
+.confirm-recipient-list span {
+  font-size: 12px;
+  color: var(--muted, #64748b);
+  word-break: break-all;
+}
+
+.reset-hint {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--muted, #64748b);
+  text-align: center;
+}
+
+.audit-action-label {
+  font-weight: 600;
+}
+
+.audit-action-code {
+  font-size: 11px;
+  color: var(--muted, #64748b);
+}
+
+
+.user-selection-bar .selection-hint {
+  color: var(--muted, #64748b);
+  font-size: 13px;
+}
+
+/* ---- ตาราง Audit Log : เรื่องที่เกี่ยวข้อง และรายละเอียดแบบอ่านง่าย ---- */
+.audit-target-title {
+  font-size: 12px;
+  color: var(--muted, #64748b);
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.audit-detail-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  line-height: 1.8;
+  white-space: nowrap;
+}
+
+.audit-detail-row span {
+  color: var(--muted, #64748b);
+}
+
+.audit-detail-row b {
+  font-weight: 600;
+}
+
+.audit-actor-department {
+  font-size: 11px;
+  color: var(--muted, #64748b);
+  margin-top: 2px;
+}
+
+/* ---- คำเตือน Caps Lock ใต้ช่องรหัสผ่าน ---- */
+.caps-lock-warning {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  /* พื้นหลังอ่อนแต่ตัวอักษรเข้มจัด ให้ค่าความต่างของสีสูงพอสำหรับผู้ที่สายตาไม่ดี
+     และยังอ่านออกบนจอที่ตั้งความสว่างต่ำหรือจอโปรเจกเตอร์ */
+  background: #fff4dc;
+  border: 1px solid #dc9a1c;
+  color: #7a3d00;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.6;
+}
+
+/* ทำคำว่า Caps Lock ให้ดูเป็นปุ่มบนแป้นพิมพ์ ผู้ใช้จะกวาดตาเจอทันทีว่าต้องกดปุ่มไหน */
+.caps-lock-key {
+  padding: 1px 7px;
+  border: 1px solid #a86400;
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  background: #fff;
+  color: #5f2c00;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+>>>>>>> dfea9ad59cb57ab9c079418833b0fe8a06a7ce6a

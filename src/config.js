@@ -15,12 +15,12 @@ const isProduction = nodeEnv === 'production';
 const renderHostname = (process.env.RENDER_EXTERNAL_HOSTNAME || '').trim();
 const defaultBaseUrl = renderHostname
   ? `https://${renderHostname}`
-  : 'http://localhost:3000';
+  : 'http://localhost:3010';
 
 const config = {
   nodeEnv,
   isProduction,
-  port: asInteger(process.env.PORT, 3000),
+  port: asInteger(process.env.PORT, 3010),
   logLevel: process.env.LOG_LEVEL || (isProduction ? 'info' : 'debug'),
   requestTimeoutMs: asInteger(process.env.REQUEST_TIMEOUT_MS, 30000),
   shutdownTimeoutMs: asInteger(process.env.SHUTDOWN_TIMEOUT_MS, 15000),
@@ -56,6 +56,38 @@ const config = {
   jwtSecret: process.env.JWT_SECRET || '',
   jwtExpiresIn: process.env.JWT_EXPIRES_IN || '8h',
 
+<<<<<<< HEAD
+=======
+  // เซสชันที่ไม่มีการใช้งานนานเกินจำนวนนาทีนี้จะหมดอายุ ต้องเข้าสู่ระบบใหม่
+  // เป็นคนละเรื่องกับ jwtExpiresIn ซึ่งเป็นอายุสูงสุดนับจากตอนเข้าสู่ระบบ
+  // เซสชันจะสิ้นสุดเมื่อถึงเงื่อนไขใดเงื่อนไขหนึ่งก่อน
+  sessionIdleMinutes: 60,
+
+  // ช่วงผ่อนผันหลังเบราว์เซอร์แจ้งว่ากำลังปิด ถ้าไม่มีคำขอใดเข้ามาล้างเครื่องหมาย
+  // ภายในเวลานี้ ถือว่าปิดจริง แล้วปล่อยให้บัญชีเข้าสู่ระบบจากเครื่องอื่นได้
+  // ต้องยาวพอให้การกดรีเฟรชหน้าจอโหลดเสร็จและยิงคำขอแรกออกมาได้ทัน
+  sessionClosingGraceSeconds: 15,
+
+  // ---------------------------------------------------------------------
+  // การส่งอีเมล ใช้ส่งรหัสยืนยันเมื่อขอตั้งรหัสผ่านใหม่
+  // ถ้ายังไม่ได้ตั้งค่า SMTP ระบบยังทำงานได้ตามปกติ เพียงแต่ส่งอีเมลไม่ได้
+  // ช่องทางที่ผู้ดูแลกดส่งจะแสดงรหัสบนหน้าจอแทน เพื่อให้แจ้งเจ้าตัวเองได้
+  // ---------------------------------------------------------------------
+  smtpHost: (process.env.SMTP_HOST || '').trim(),
+  smtpPort: Number.parseInt(process.env.SMTP_PORT || '587', 10),
+  smtpSecure: asBoolean(process.env.SMTP_SECURE, false),
+  smtpUser: (process.env.SMTP_USER || '').trim(),
+  smtpPassword: process.env.SMTP_PASSWORD || '',
+  smtpFrom: (process.env.SMTP_FROM || '').trim(),
+
+
+  // อายุของรหัสยืนยัน และจำนวนครั้งที่ยอมให้กรอกผิด
+  // รหัสมีอายุ 5 นาที และใช้ได้เพียงครั้งเดียว (บันทึก used_at แล้วถือว่าใช้แล้ว)
+  passwordResetCodeMinutes: 5,
+  passwordResetMaxAttempts: 5,
+
+
+>>>>>>> dfea9ad59cb57ab9c079418833b0fe8a06a7ce6a
   devBypassLineAuth:
     !isProduction && asBoolean(process.env.DEV_BYPASS_LINE_AUTH, false),
 };
