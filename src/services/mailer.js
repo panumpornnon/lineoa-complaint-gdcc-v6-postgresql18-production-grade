@@ -99,6 +99,12 @@ export function buildPasswordResetMail({ displayName, code, minutes, resetUrl })
 
   const html = `<!doctype html>
 <html lang="th">
+  <head>
+    <meta charset="utf-8" />
+    <!-- โปรแกรมอ่านเมลบางตัวไม่สนใจ target ที่แท็ก a แต่ยอมทำตาม base
+         ใส่ไว้ทั้งสองที่จึงครอบคลุมกว่า -->
+    <base target="_blank" />
+  </head>
   <body style="margin:0;padding:24px;background:#f1f5f9;font-family:'Segoe UI',Tahoma,sans-serif;color:#0f172a;">
     <div style="max-width:560px;margin:0 auto;background:#ffffff;border-radius:12px;padding:28px;">
       <p style="margin:0 0 4px;font-size:12px;letter-spacing:.08em;color:#0b695b;font-weight:700;">PASSWORD RESET</p>

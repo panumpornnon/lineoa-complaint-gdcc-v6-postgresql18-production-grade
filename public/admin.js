@@ -2690,6 +2690,37 @@ async function requestResetCode() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// เตือนเมื่อเปิด Caps Lock ค้างไว้ขณะกรอกรหัสผ่าน
+//
+// ช่องรหัสผ่านปิดบังตัวอักษรไว้ ผู้ใช้จึงมองไม่เห็นว่าที่พิมพ์ไปกลายเป็นพิมพ์ใหญ่ทั้งหมด
+// แล้วเข้าใจว่าจำรหัสผิดหรือบัญชีมีปัญหา ทั้งที่กรอกถูกแต่ผิดตัวพิมพ์
+// เรื่องนี้สำคัญเป็นพิเศษกับระบบนี้ เพราะเข้าสู่ระบบผิดหลายครั้งจะถูกจำกัดการเรียก
+//
+// อ่านสถานะจาก event.getModifierState ซึ่งเป็นค่าจริงจากระบบปฏิบัติการ
+// ไม่ใช่การเดาจากตัวอักษรที่พิมพ์ จึงถูกต้องกับทุกภาษาแป้นพิมพ์
+function watchCapsLock(inputSelector, warningSelector) {
+  const input = $(inputSelector);
+  const warning = $(warningSelector);
+  if (!input || !warning) return;
+
+  const sync = (event) => {
+    // เบราว์เซอร์เก่าบางตัวไม่มี getModifierState ถ้าไม่มีก็ไม่เตือน ดีกว่าเตือนผิด
+    if (typeof event.getModifierState !== "function") return;
+    warning.classList.toggle("hidden", !event.getModifierState("CapsLock"));
+  };
+
+  input.addEventListener("keydown", sync);
+  input.addEventListener("keyup", sync);
+  // เหตุการณ์ focus ไม่ได้พกสถานะปุ่มมาด้วย จึงอ่านตอนนี้ไม่ได้
+  // ต้องรอจังหวะที่ผู้ใช้กดปุ่มแรก แล้วค่อยแสดงคำเตือน
+  input.addEventListener("blur", () => warning.classList.add("hidden"));
+}
+
+watchCapsLock("#password", "#passwordCapsLock");
+watchCapsLock("#resetPassword", "#resetPasswordCapsLock");
+watchCapsLock("#resetPasswordConfirm", "#resetPasswordCapsLock");
+
 $("#forgotPasswordLink").onclick = () => openResetView($("#username").value.trim());
 $("#resetBackToLogin").onclick = () => closeResetView();
 

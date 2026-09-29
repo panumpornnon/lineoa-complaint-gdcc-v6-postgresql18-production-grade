@@ -9,7 +9,7 @@
     <meta name="theme-color" content="#083f3a" />
     <title>Smart City Complaint Command Center</title>
     <link rel="stylesheet" href="/styles.css?v=20260727-image-viewer-1" />
-    <link rel="stylesheet" href="/admin-v3.css?v=20260929-audit-readability-5" />
+    <link rel="stylesheet" href="/admin-v3.css?v=20260929-caps-lock-2" />
     <link
       rel="stylesheet"
       href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
@@ -19,7 +19,7 @@
       src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
       crossorigin="anonymous"
     ></script>
-    <script type="module" src="/admin.js?v=20260929-audit-readability-5"></script>
+    <script type="module" src="/admin.js?v=20260929-caps-lock-2"></script>
   </head>
   <body class="admin-v3-body">
     <section id="loginPanel" class="v3-login">
@@ -70,6 +70,13 @@
                 autocomplete="current-password"
                 required
                 placeholder="••••••••••••" /></label
+            ><p
+              id="passwordCapsLock"
+              class="caps-lock-warning hidden"
+              role="status"
+            >
+              ⚠ เปิด <b class="caps-lock-key">Caps Lock</b> อยู่ ตัวอักษรจะกลายเป็นพิมพ์ใหญ่ทั้งหมด
+            </p
             ><button class="v3-primary full" type="submit">
               เข้าสู่ระบบอย่างปลอดภัย
             </button>
@@ -146,6 +153,13 @@
                 required
                 placeholder="••••••••••••" /></label
             >
+            <p
+              id="resetPasswordCapsLock"
+              class="caps-lock-warning hidden"
+              role="status"
+            >
+              ⚠ เปิด <b class="caps-lock-key">Caps Lock</b> อยู่ ตัวอักษรจะกลายเป็นพิมพ์ใหญ่ทั้งหมด
+            </p>
             <ul id="resetPasswordRules" class="password-rules"></ul>
             <button class="v3-primary full" type="submit">บันทึกรหัสผ่านใหม่</button>
           </form>

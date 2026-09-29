@@ -2987,3 +2987,36 @@ a.map-link-button:visited{
   color: var(--muted, #64748b);
   margin-top: 2px;
 }
+
+/* ---- คำเตือน Caps Lock ใต้ช่องรหัสผ่าน ---- */
+.caps-lock-warning {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  /* พื้นหลังอ่อนแต่ตัวอักษรเข้มจัด ให้ค่าความต่างของสีสูงพอสำหรับผู้ที่สายตาไม่ดี
+     และยังอ่านออกบนจอที่ตั้งความสว่างต่ำหรือจอโปรเจกเตอร์ */
+  background: #fff4dc;
+  border: 1px solid #dc9a1c;
+  color: #7a3d00;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.6;
+}
+
+/* ทำคำว่า Caps Lock ให้ดูเป็นปุ่มบนแป้นพิมพ์ ผู้ใช้จะกวาดตาเจอทันทีว่าต้องกดปุ่มไหน */
+.caps-lock-key {
+  padding: 1px 7px;
+  border: 1px solid #a86400;
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  background: #fff;
+  color: #5f2c00;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 12px;
+  font-weight: 800;
+}
+
