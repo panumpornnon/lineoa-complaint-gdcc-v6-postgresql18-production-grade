@@ -2677,8 +2677,6 @@ a.map-link-button:visited{
     flex: 1;
   }
 }
-<<<<<<< HEAD
-=======
 
 /* ===== แจ้งเตือนระดับเตือน (20260924-single-session-1) =====
    styles.css มีแค่ .alert (แดง = ข้อผิดพลาด) กับ .alert.success (เขียว)
@@ -3022,4 +3020,3 @@ a.map-link-button:visited{
   font-weight: 800;
 }
 
->>>>>>> dfea9ad59cb57ab9c079418833b0fe8a06a7ce6a
