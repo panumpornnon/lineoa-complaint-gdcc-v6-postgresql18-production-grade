@@ -1,4 +1,9 @@
-import crypto from 'node:crypto';
+// นำเข้าเป็นชื่อฟังก์ชันโดยตรง ไม่ใช้ชื่อ crypto เป็นตัวแปรกลาง
+// เพราะถ้าบรรทัดนำเข้าหายไป (เช่นตอนคัดลอกไฟล์ขึ้นเครื่อง server ไม่ครบ)
+// คำว่า crypto จะไปชนกับตัวแปร global ของ Node ซึ่งเป็น Web Crypto
+// ที่ไม่มี randomInt และ randomBytes โค้ดจะพังตอนทำงานจริงเท่านั้น ไม่พังตอนเริ่มระบบ
+// แบบนี้ถ้าบรรทัดนี้หาย เซิร์ฟเวอร์จะไม่ยอมเริ่มทำงานเลย เห็นปัญหาทันที
+import { randomInt, randomBytes } from 'node:crypto';
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
@@ -336,7 +341,7 @@ async function writeAnonymousAudit(req, { actorId = null, action, entityId = nul
 // รหัสแปดหลักสร้างจากตัวสร้างเลขสุ่มเชิงรหัสลับ ไม่ใช่ Math.random
 // เพราะเป็นค่าที่ใช้ยืนยันสิทธิ์เข้าถึงบัญชี
 function generateResetCode() {
-  return String(crypto.randomInt(0, 100_000_000)).padStart(8, '0');
+  return String(randomInt(0, 100_000_000)).padStart(8, '0');
 }
 
 // สร้างรหัสใหม่ให้ผู้ใช้หนึ่งคน พร้อมยกเลิกใบเก่าที่ยังไม่ได้ใช้
@@ -3039,7 +3044,7 @@ function detectDataset(headerRow) {
 // ใช้ตัวอักษรที่อ่านแล้วไม่สับสน ตัด O 0 I l 1 ออก เพราะต้องอ่านให้เจ้าหน้าที่ฟัง
 function generateTemporaryPassword() {
   const alphabet = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
-  const bytes = crypto.randomBytes(16);
+  const bytes = randomBytes(16);
   let password = '';
   for (const byte of bytes) password += alphabet[byte % alphabet.length];
   return password;

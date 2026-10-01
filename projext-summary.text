@@ -950,3 +950,36 @@ Gmail, Outlook และ Thunderbird บังคับเปิดลิงก�
 
 สรุป: เมื่อใช้งานจริงกับเซิร์ฟเวอร์เมลของเทศบาล ลิงก์จะเปิดแท็บใหม่ตามปกติ
 ไม่ต้องแก้อะไรเพิ่ม
+
+--------------------------------------------------------------------------------
+2026-10-01 (แก้บั๊กบนเครื่อง production) : crypto.randomInt is not a function
+--------------------------------------------------------------------------------
+
+อาการ: เครื่อง server (C:\www\nodjs18\complaint) กดลืมรหัสผ่านแล้วได้ 500
+log บันทึกว่า TypeError: crypto.randomInt is not a function
+ที่ generateResetCode (src/routes/admin.js บรรทัด 240 ของไฟล์บนเครื่องนั้น)
+
+สาเหตุ: ไฟล์ src/routes/admin.js ที่คัดลอกขึ้นเครื่อง server ไม่มีบรรทัดแรก
+import crypto from 'node:crypto'
+เมื่อไม่มีการนำเข้า คำว่า crypto ในโค้ดจะไปอ้างถึงตัวแปร global ของ Node
+ซึ่งเป็น Web Crypto (globalThis.crypto) คนละตัวกับโมดูล node:crypto
+Web Crypto มี randomUUID และ getRandomValues แต่ไม่มี randomInt และ randomBytes
+โค้ดจึงผ่านการตรวจไวยากรณ์และเซิร์ฟเวอร์เริ่มทำงานได้ตามปกติ
+แต่พังเฉพาะตอนมีคนกดใช้งานจริง ซึ่งเป็นความผิดพลาดที่อันตรายเพราะไม่มีสัญญาณเตือนล่วงหน้า
+ยืนยันแล้วด้วยการทดสอบ: typeof globalThis.crypto.randomInt ได้ค่า undefined
+ส่วน typeof (await import('node:crypto')).randomInt ได้ค่า function
+
+แก้ที่ต้นเหตุเชิงโครงสร้าง ไม่ใช่แค่เติมบรรทัดกลับ
+- เปลี่ยนจาก import crypto from 'node:crypto' แล้วเรียก crypto.randomInt
+  เป็น import { randomInt, randomBytes } from 'node:crypto' แล้วเรียกชื่อตรงๆ
+- ข้อดีคือไม่มีชื่อ crypto เป็นตัวแปรกลางให้ไปชนกับ global อีก
+  ถ้าวันหนึ่งบรรทัดนำเข้าหายไปอีก เซิร์ฟเวอร์จะไม่ยอมเริ่มทำงานเลย เห็นปัญหาทันที
+  ดีกว่าปล่อยให้พังเงียบๆ แล้วไปโผล่ตอนเจ้าหน้าที่ใช้งานจริง
+- จุดที่แก้มีสองแห่ง generateResetCode และ generateTemporaryPassword
+
+สิ่งที่ต้องทำบนเครื่อง server
+  1. คัดลอก src/routes/admin.js ฉบับใหม่ขึ้นไปทับ
+  2. รีสตาร์ท node
+  3. ตรวจว่าโฟลเดอร์ production มีไฟล์ครบ โดยเฉพาะชุดที่เพิ่มใหม่
+     src/services/mailer.js, src/utils/password.js, sql/035_...sql
+     และ migration ต้องถูกรันบนฐานข้อมูลของเครื่องนั้นแล้ว

@@ -82,7 +82,7 @@ if (config.smtpHost) {
 
   console.log('\nค่าที่ได้ ถ้าต้องการให้ทั้งระบบวิ่งผ่าน Ethereal ให้นำไปใส่ใน .env');
   console.log('  SMTP_HOST=smtp.ethereal.email');
-  console.log('  SMTP_PORT=587');
+  sole.log('  SMTP_PORT=587');
   console.log('  SMTP_SECURE=false');
   console.log(`  SMTP_USER=${account.user}`);
   console.log(`  SMTP_PASSWORD=${account.pass}`);
