@@ -1,11 +1,22 @@
 // บริการส่งอีเมล ใช้ส่งรหัสยืนยันเมื่อขอตั้งรหัสผ่านใหม่
 //
-// ออกแบบให้ระบบทำงานได้ตามปกติแม้ยังไม่ได้ตั้งค่า SMTP หรือยังไม่ได้ติดตั้ง
-// nodemailer เพราะเทศบาลยังไม่ได้เปิดพอร์ตให้ใช้งาน จึงไม่ import ไว้ที่หัวไฟล์
-// แต่เรียกแบบ dynamic ตอนจะส่งจริง ถ้าไม่มีแพ็กเกจก็แจ้งกลับว่าส่งไม่ได้
-// โดยไม่ทำให้เซิร์ฟเวอร์เริ่มทำงานไม่ขึ้น
+// เลือกวิธีส่งเองโดยอัตโนมัติ ไม่ต้องแก้โค้ดให้ต่างกันระหว่างเครื่อง
+//   เครื่องที่ติดตั้ง nodemailer ไว้  -> ใช้ nodemailer เหมือนเดิม
+//   เครื่องที่ไม่มี nodemailer        -> ใช้ src/services/smtp-client.js ที่เขียนเอง
+//                                       ซึ่งใช้แต่ net/tls ที่มากับ Node
+//
+// ทำแบบนี้เพราะเครื่อง server ของเทศบาลติดตั้งแพ็กเกจเพิ่มได้ยาก
+// คัดลอกไฟล์ขึ้นไปแล้วใช้งานได้ทันที ไม่ต้องรัน npm install และไม่ต้องมีอินเทอร์เน็ต
+// ขณะที่เครื่องพัฒนายังทำงานเหมือนเดิมทุกอย่าง
+//
+// บังคับวิธีส่งได้ด้วย SMTP_TRANSPORT=nodemailer หรือ SMTP_TRANSPORT=builtin
+// มีไว้ให้ทดสอบว่าทั้งสองทางให้ผลตรงกัน ก่อนนำขึ้นเครื่องจริง
+//
+// ระบบยังทำงานได้ตามปกติแม้ยังไม่ได้ตั้งค่า SMTP
+// ช่องทางที่ผู้ดูแลกดส่งจะแสดงรหัสบนหน้าจอแทน เพื่อให้แจ้งเจ้าตัวเองได้
 import config from '../config.js';
 import { logger } from '../logger.js';
+import { sendMailOverSmtp } from './smtp-client.js';
 
 let transportPromise = null;
 
@@ -13,8 +24,9 @@ export function isMailConfigured() {
   return Boolean(config.smtpHost && config.smtpFrom);
 }
 
-async function getTransport() {
-  if (!isMailConfigured()) return null;
+// หา nodemailer ถ้ามี ถ้าไม่มีก็คืน null แล้วไปใช้ตัวที่เขียนเอง
+// ไม่ import ไว้ที่หัวไฟล์เพราะต้องให้เซิร์ฟเวอร์เริ่มทำงานได้แม้ไม่มีแพ็กเกจนี้
+async function getNodemailerTransport() {
   if (transportPromise) return transportPromise;
 
   transportPromise = (async () => {
@@ -22,9 +34,6 @@ async function getTransport() {
     try {
       nodemailer = (await import('nodemailer')).default;
     } catch {
-      logger.error('mailer_package_missing', {
-        hint: 'ยังไม่ได้ติดตั้ง nodemailer — รัน npm install ก่อน',
-      });
       return null;
     }
 
@@ -36,6 +45,8 @@ async function getTransport() {
       ...(config.smtpUser
         ? { auth: { user: config.smtpUser, pass: config.smtpPassword } }
         : {}),
+      ...(config.smtpTlsInsecure ? { tls: { rejectUnauthorized: false } } : {}),
+      ...(config.smtpHeloName ? { name: config.smtpHeloName } : {}),
       connectionTimeout: 10_000,
       greetingTimeout: 10_000,
       socketTimeout: 15_000,
@@ -52,23 +63,49 @@ export async function sendMail({ to, subject, text, html }) {
     return { sent: false, reason: 'not_configured' };
   }
 
-  const transport = await getTransport();
-  if (!transport) {
+  const forced = config.smtpTransport;
+  const transport =
+    forced === 'builtin' ? null : await getNodemailerTransport();
+
+  if (forced === 'nodemailer' && !transport) {
+    logger.error('mail_transport_missing', {
+      hint: 'ตั้ง SMTP_TRANSPORT=nodemailer ไว้ แต่ยังไม่ได้ติดตั้ง nodemailer',
+    });
     return { sent: false, reason: 'package_missing' };
   }
 
   try {
-    await transport.sendMail({
+    if (transport) {
+      const info = await transport.sendMail({
+        from: config.smtpFrom,
+        to,
+        subject,
+        // ส่งทั้งสองรูปแบบในฉบับเดียว โปรแกรมอ่านเมลจะเลือกเอง
+        text,
+        ...(html ? { html } : {}),
+        ...(config.smtpReplyTo ? { replyTo: config.smtpReplyTo } : {}),
+      });
+      logger.info('mail_sent', { subject, via: 'nodemailer' });
+      return { sent: true, messageId: info.messageId };
+    }
+
+    const result = await sendMailOverSmtp({
+      host: config.smtpHost,
+      port: config.smtpPort,
+      secure: config.smtpSecure,
+      user: config.smtpUser,
+      pass: config.smtpPassword,
       from: config.smtpFrom,
       to,
       subject,
-      // ส่งทั้งสองรูปแบบในฉบับเดียว โปรแกรมอ่านเมลจะเลือกเอง
-      // ตัวที่อ่าน HTML ไม่ได้ หรือผู้ใช้ปิดการแสดง HTML ไว้ ก็ยังอ่าน text ได้ครบ
       text,
-      ...(html ? { html } : {}),
+      html,
+      rejectUnauthorized: !config.smtpTlsInsecure,
+      heloName: config.smtpHeloName,
+      replyTo: config.smtpReplyTo,
     });
-    logger.info('mail_sent', { subject });
-    return { sent: true };
+    logger.info('mail_sent', { subject, via: 'builtin' });
+    return { sent: true, messageId: result.messageId };
   } catch (error) {
     // ไม่บันทึกเนื้อหาอีเมลลง log เพราะมีรหัสยืนยันอยู่ข้างใน
     logger.error('mail_send_failed', { error: error.message, subject });
