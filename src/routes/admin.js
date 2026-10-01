@@ -23,6 +23,9 @@ import {
 } from '../services/uploads.js';
 import { escapeCsvField, toExcelText, parseCsv, unwrapExcelText } from '../utils/csv.js';
 import { checkPasswordStrength, describePasswordRequirements } from '../utils/password.js';
+//user define
+import crypto from 'node:crypto';
+
 
 const router = Router();
 
@@ -237,7 +240,10 @@ async function writeAnonymousAudit(req, { actorId = null, action, entityId = nul
 // รหัสแปดหลักสร้างจากตัวสร้างเลขสุ่มเชิงรหัสลับ ไม่ใช่ Math.random
 // เพราะเป็นค่าที่ใช้ยืนยันสิทธิ์เข้าถึงบัญชี
 function generateResetCode() {
-  return String(crypto.randomInt(0, 100_000_000)).padStart(8, '0');
+  //return String(crypto.randomInt(0, 100_000_000)).padStart(8, '0');
+  //user define
+  //return String(Math.floor(100000 + crypto.randomBytes(4).readUInt32BE(0) % 900000));
+  return String(Math.floor(10000000 + crypto.randomBytes(4).readUInt32BE(0) % 90000000));
 }
 
 // สร้างรหัสใหม่ให้ผู้ใช้หนึ่งคน พร้อมยกเลิกใบเก่าที่ยังไม่ได้ใช้
